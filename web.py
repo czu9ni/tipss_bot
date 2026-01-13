@@ -501,7 +501,7 @@ TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Soccer Bot - Professional AI Tips Dashboard</title>
+    <title>Soccer Bot - Profi AI Tipp Dashboard</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         .hero { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 60px 0; }
@@ -520,7 +520,7 @@ TEMPLATE = """
     <div class="hero text-center">
         <div class="container">
             <h1 class="display-4">Soccer Bot AI Dashboard</h1>
-            <p class="lead">Advanced Football Predictions & Analytics</p>
+            <p class="lead">Fejlett futball tippek es elemzesek</p>
         </div>
     </div>
 
@@ -529,20 +529,20 @@ TEMPLATE = """
             <div class="col-md-6">
                 <div class="card mb-4">
                     <div class="card-header bg-primary text-white">
-                        <h5 class="mb-0">API Status</h5>
+                        <h5 class="mb-0">API Allapot</h5>
                     </div>
                     <div class="card-body">
-                        <p><strong>Odds API:</strong> {{ "Configured" if odds_configured else "Missing" }}</p>
-                        <p><strong>Football Data:</strong> {{ "Configured" if football_configured else "Missing" }}</p>
-                        <p><strong>Weather:</strong> Open-Meteo (no key)</p>
-                        <p><strong>News:</strong> RSS feeds (no key)</p>
+                        <p><strong>Odds API:</strong> {{ "Beallitva" if odds_configured else "Hianyzik" }}</p>
+                        <p><strong>Football Data:</strong> {{ "Beallitva" if football_configured else "Hianyzik" }}</p>
+                        <p><strong>Idojaras:</strong> Open-Meteo (nincs kulcs)</p>
+                        <p><strong>Hirek:</strong> RSS feedek (nincs kulcs)</p>
                     </div>
                 </div>
             </div>
             <div class="col-md-6">
                 <div class="card mb-4">
                     <div class="card-header bg-success text-white">
-                        <h5 class="mb-0">Active Competitions</h5>
+                        <h5 class="mb-0">Aktiv bajnoksagok</h5>
                     </div>
                     <div class="card-body">
                         <ul class="list-group list-group-flush">
@@ -562,7 +562,7 @@ TEMPLATE = """
             <div class="col-12">
                 <div class="card mb-4 tip-highlight">
                     <div class="card-header bg-warning text-dark">
-                        <h5 class="mb-0">Live Match Odds & AI Prediction</h5>
+                        <h5 class="mb-0">Elo oddsok es AI tipp</h5>
                     </div>
                     <div class="card-body">
                         {% if odds %}
@@ -570,9 +570,9 @@ TEMPLATE = """
                         <table class="table table-striped odds-table text-center">
                             <thead>
                                 <tr>
-                                    <th>Home Win</th>
-                                    <th>Draw</th>
-                                    <th>Away Win</th>
+                                    <th>Hazai</th>
+                                    <th>Donto</th>
+                                    <th>Vendeg</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -584,11 +584,11 @@ TEMPLATE = """
                             </tbody>
                         </table>
                         <div class="alert alert-success text-center">
-                            <h5 class="ai-tip">AI Recommendation: {{ odds.tip }}</h5>
+                            <h5 class="ai-tip">AI javaslat: {{ odds.tip }}</h5>
                         </div>
                         <canvas id="oddsChart" width="400" height="200"></canvas>
                         {% else %}
-                        <p class="text-muted text-center">No live odds available at the moment.</p>
+                        <p class="text-muted text-center">Jelenleg nincs elerheto elo odds.</p>
                         {% endif %}
                     </div>
                 </div>
@@ -598,22 +598,22 @@ TEMPLATE = """
             <div class="col-12">
                 <div class="card mb-4">
                     <div class="card-header bg-dark text-white">
-                        <h5 class="mb-0">Best 2-Match Combo (24h, Non-Rivalry, ~2.00)</h5>
+                        <h5 class="mb-0">Legjobb 2-meccses kombi (24h, nem rangado, ~2.00)</h5>
                     </div>
                     <div class="card-body">
                         {% if best_combo %}
                             <p class="text-center mb-2">
-                                <strong>Combined Odds: {{ "%.2f"|format(best_combo.combined_odds) }}</strong>
+                                <strong>Ossz odds: {{ "%.2f"|format(best_combo.combined_odds) }}</strong>
                             </p>
                             <table class="table table-striped text-center">
                                 <thead>
                                     <tr>
                                         <th>Match</th>
-                                        <th>Outcome</th>
+                                        <th>Kimenetel</th>
                                         <th>Odds</th>
-                                        <th>Score</th>
-                                        <th>Risk</th>
-                                        <th>Why</th>
+                                        <th>Pont</th>
+                                        <th>Kockazat</th>
+                                        <th>Indok</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -623,15 +623,15 @@ TEMPLATE = """
                                         <td>{{ pick.outcome }}</td>
                                         <td><strong>{{ "%.2f"|format(pick.odds) }}</strong></td>
                                         <td>{{ "%.2f"|format(pick.score) }}</td>
-                                        <td>{{ best_combo.risk }}</td>
+                                        <td>{{ "zold" if best_combo.risk == "green" else ("sarga" if best_combo.risk == "yellow" else "piros") }}</td>
                                         <td>{{ ", ".join(_match_reasons(pick)) }}</td>
                                     </tr>
                                     {% endfor %}
                                 </tbody>
                             </table>
-                            <p class="text-muted text-center">Odds pool: {{ odds_count }} matches (24h, non-rivalry)</p>
+                            <p class="text-muted text-center">Odds pool: {{ odds_count }} meccs (24h, nem rangado)</p>
                         {% else %}
-                            <p class="text-muted text-center">No valid 2-match combo within 2.00 ± 0.15.</p>
+                            <p class="text-muted text-center">Nincs ervenyes 2-meccses kombi 2.00 ± 0.15 savban.</p>
                         {% endif %}
                     </div>
                 </div>
@@ -642,12 +642,12 @@ TEMPLATE = """
             <div class="col-12">
                 <div class="card mb-4">
                     <div class="card-header bg-secondary text-white">
-                        <h5 class="mb-0">Two Matches Near 2.00 Odds</h5>
+                        <h5 class="mb-0">Ket meccs 2.00 koruli oddssal</h5>
                     </div>
                     <div class="card-body">
                         <form method="get" class="text-center mb-3">
                             <input type="hidden" name="tips" value="1">
-                            <button class="btn btn-success" type="submit">Show 2 matches near 2.00</button>
+                            <button class="btn btn-success" type="submit">Mutass 2 meccset 2.00 korul</button>
                         </form>
                         {% if tips_requested %}
                             {% if target_matches %}
@@ -655,9 +655,9 @@ TEMPLATE = """
                                     <thead>
                                         <tr>
                                             <th>Match</th>
-                                            <th>Outcome</th>
+                                            <th>Kimenetel</th>
                                             <th>Odds</th>
-                                            <th>Score</th>
+                                            <th>Pont</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -672,7 +672,7 @@ TEMPLATE = """
                                     </tbody>
                                 </table>
                             {% else %}
-                                <p class="text-muted text-center">No matches found near 2.00 odds.</p>
+                                <p class="text-muted text-center">Nincs meccs 2.00 koruli oddssal.</p>
                             {% endif %}
                         {% endif %}
                     </div>
@@ -684,15 +684,15 @@ TEMPLATE = """
             <div class="col-md-6">
                 <div class="card mb-4">
                     <div class="card-header bg-info text-white">
-                        <h5 class="mb-0">Recent Matches</h5>
+                        <h5 class="mb-0">Legutobbi meccsek</h5>
                     </div>
                     <div class="card-body">
                         <table class="table table-hover">
                             <thead>
                                 <tr>
-                                    <th>Home</th>
-                                    <th>Away</th>
-                                    <th>Score</th>
+                                    <th>Hazai</th>
+                                    <th>Vendeg</th>
+                                    <th>Eredmeny</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -711,15 +711,15 @@ TEMPLATE = """
             <div class="col-md-6">
                 <div class="card mb-4">
                     <div class="card-header bg-danger text-white">
-                        <h5 class="mb-0">League Standings</h5>
+                        <h5 class="mb-0">Tabella</h5>
                     </div>
                     <div class="card-body">
                         <table class="table table-hover">
                             <thead>
                                 <tr>
-                                    <th>Pos</th>
-                                    <th>Team</th>
-                                    <th>Pts</th>
+                                    <th>Hely</th>
+                                    <th>Csapat</th>
+                                    <th>Pont</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -747,7 +747,7 @@ TEMPLATE = """
             new Chart(ctx, {
                 type: 'bar',
                 data: {
-                    labels: ['Home Win', 'Draw', 'Away Win'],
+                    labels: ['Hazai', 'Donto', 'Vendeg'],
                     datasets: [{
                         label: 'Probability',
                         data: [{{ odds.home_prob }}, {{ odds.draw_prob }}, {{ odds.away_prob }}],
@@ -783,9 +783,9 @@ def dashboard():
     matches = list_matches(db)
     if not matches:
         sample_matches = [
-            Match("Team A", "Team B", 2, 1, "2023-01-01"),
-            Match("Team A", "Team C", 1, 1, "2023-01-02"),
-            Match("Team B", "Team C", 0, 3, "2023-01-03"),
+            Match("Csapat A", "Csapat B", 2, 1, "2023-01-01"),
+            Match("Csapat A", "Csapat C", 1, 1, "2023-01-02"),
+            Match("Csapat B", "Csapat C", 0, 3, "2023-01-03"),
         ]
         for match in sample_matches:
             try:
@@ -851,7 +851,7 @@ def dashboard():
             outcomes = _extract_h2h_outcomes(match)
             home_odds = _find_price(outcomes, home_team)
             away_odds = _find_price(outcomes, away_team)
-            draw_odds = _find_price(outcomes, "Draw")
+            draw_odds = _find_price(outcomes, "Donto")
             if home_odds is not None and away_odds is not None and draw_odds is not None:
                 # Enhanced AI tip with stats, weather and news factors
                 home_stats = get_team_stats(db, home_team)
@@ -875,19 +875,19 @@ def dashboard():
 
                 if home_final > away_final and home_final > draw_final:
                     tip = (
-                        "Home win (AI: prob "
+                        "Hazai win (AI: prob "
                         f"{home_prob:.2f}, stats {stats_factor:.2f}, "
                         f"weather {weather_factor:.2f}, news {news_factor:.2f})"
                     )
                 elif away_final > home_final and away_final > draw_final:
                     tip = (
-                        "Away win (AI: prob "
+                        "Vendeg win (AI: prob "
                         f"{away_prob:.2f}, stats {stats_factor:.2f}, "
                         f"weather {weather_factor:.2f}, news {news_factor:.2f})"
                     )
                 else:
                     tip = (
-                        "Draw (AI: prob "
+                        "Donto (AI: prob "
                         f"{draw_prob:.2f}, stats {stats_factor:.2f}, "
                         f"weather {weather_factor:.2f}, news {news_factor:.2f})"
                     )
