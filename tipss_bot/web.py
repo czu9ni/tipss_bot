@@ -8,6 +8,7 @@ import json
 import os
 import re
 import time
+from datetime import datetime, timezone
 import requests
 
 app = Flask(__name__)
@@ -25,6 +26,7 @@ _RSS_CACHE: dict[str, object] = {"fetched_at": 0.0, "items": []}
 _GEOCODE_CACHE: dict[str, dict] = {}
 _WEATHER_CACHE: dict[str, dict] = {}
 _WEIGHTS_CACHE: dict[str, float] | None = None
+_RIVALRIES_CACHE: list[tuple[str, str]] | None = None
 _TEAM_LOCATION_OVERRIDES: dict[str, dict] | None = None
 _SPORTS_CACHE: dict[str, object] = {"fetched_at": 0.0, "keys": []}
 SPORTS_CACHE_TTL_SECONDS = 3600
@@ -94,6 +96,85 @@ def _load_weights() -> dict[str, float]:
             pass
     _WEIGHTS_CACHE = defaults
     return defaults
+
+
+def _load_rivalries() -> list[tuple[str, str]]:
+    global _RIVALRIES_CACHE
+    if _RIVALRIES_CACHE is not None:
+        return _RIVALRIES_CACHE
+    default_pairs = [
+        ("Barcelona", "Real Madrid"),
+        ("Atletico Madrid", "Real Madrid"),
+        ("Barcelona", "Espanyol"),
+        ("AC Milan", "Inter"),
+        ("Juventus", "Inter"),
+        ("Roma", "Lazio"),
+        ("Napoli", "Roma"),
+        ("Bayern Munich", "Borussia Dortmund"),
+        ("Schalke", "Borussia Dortmund"),
+        ("Arsenal", "Tottenham"),
+        ("Manchester United", "Manchester City"),
+        ("Liverpool", "Everton"),
+        ("Manchester United", "Liverpool"),
+        ("Chelsea", "Arsenal"),
+        ("Celtic", "Rangers"),
+        ("PSG", "Marseille"),
+    ]
+    path = os.path.join("data", "rivalries.json")
+    pairs: list[tuple[str, str]] = []
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+                if isinstance(data, list):
+                    for item in data:
+                        if isinstance(item, list) and len(item) == 2:
+                            pairs.append((str(item[0]), str(item[1])))
+        except Exception:
+            pairs = []
+    if not pairs:
+        pairs = default_pairs
+    _RIVALRIES_CACHE = pairs
+    return pairs
+
+
+def _normalize_team_name(name: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]", "", name.lower())
+    cleaned = cleaned.replace("fc", "").replace("cf", "").replace("afc", "")
+    return cleaned
+
+
+def _is_rivalry(home_team: str, away_team: str) -> bool:
+    home_norm = _normalize_team_name(home_team)
+    away_norm = _normalize_team_name(away_team)
+    for left, right in _load_rivalries():
+        left_norm = _normalize_team_name(left)
+        right_norm = _normalize_team_name(right)
+        if not left_norm or not right_norm:
+            continue
+        if (left_norm in home_norm and right_norm in away_norm) or (
+            left_norm in away_norm and right_norm in home_norm
+        ):
+            return True
+    return False
+
+
+def _within_hours(match: dict, hours: int) -> bool:
+    commence = match.get("commence_time")
+    if not commence or not isinstance(commence, str):
+        return False
+    try:
+        if commence.endswith("Z"):
+            commence_dt = datetime.fromisoformat(commence.replace("Z", "+00:00"))
+        else:
+            commence_dt = datetime.fromisoformat(commence)
+        if commence_dt.tzinfo is None:
+            commence_dt = commence_dt.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        delta = commence_dt - now
+        return 0 <= delta.total_seconds() <= hours * 3600
+    except Exception:
+        return False
 
 
 def _fetch_rss_items() -> list[dict]:
@@ -249,6 +330,8 @@ def _score_match(
         return None
     home_team = match.get("home_team", "")
     away_team = match.get("away_team", "")
+    if not home_team or not away_team:
+        return None
     implied_prob = 1 / best["price"]
     odds_score = max(0.0, 1.0 - best["distance"] / target)
     news_score = _news_factor(news_items, home_team, away_team)
@@ -458,7 +541,7 @@ TEMPLATE = """
             <div class="col-12">
                 <div class="card mb-4">
                     <div class="card-header bg-dark text-white">
-                        <h5 class="mb-0">Best Pick (Weighted)</h5>
+                        <h5 class="mb-0">Best Pick (Weighted, Next 24h, Non-Rivalry)</h5>
                     </div>
                     <div class="card-body">
                         {% if best_pick %}
@@ -481,7 +564,7 @@ TEMPLATE = """
                                     </tr>
                                 </tbody>
                             </table>
-                            <p class="text-muted text-center">Odds pool: {{ odds_count }} matches</p>
+                            <p class="text-muted text-center">Odds pool: {{ odds_count }} matches (24h, non-rivalry)</p>
                         {% else %}
                             <p class="text-muted text-center">No best pick available.</p>
                         {% endif %}
@@ -628,6 +711,7 @@ TEMPLATE = """
 def dashboard():
     tips_requested = request.args.get("tips") == "1"
     target_odds = 2.0
+    window_hours = 24
 
     db = connect(config.db_url)
     db.ensure_schema()
@@ -664,15 +748,22 @@ def dashboard():
     odds_count = 0
     best_pick = None
     try:
-        if tips_requested:
-            data = _fetch_odds_matches(config.odds_api_key)
-        else:
-            data = _fetch_odds_matches(config.odds_api_key, keys=["soccer_epl"])
+        data = _fetch_odds_matches(config.odds_api_key)
+        eligible = []
         if data:
-            odds_count = len(data)
+            for match in data:
+                home_team = match.get("home_team", "")
+                away_team = match.get("away_team", "")
+                if not _within_hours(match, window_hours):
+                    continue
+                if _is_rivalry(home_team, away_team):
+                    continue
+                eligible.append(match)
+        if eligible:
+            odds_count = len(eligible)
             rss_items = _fetch_rss_items()
             scored_candidates = []
-            for match in data:
+            for match in eligible:
                 scored = _score_match(match, target_odds, rss_items, db)
                 if scored:
                     scored_candidates.append((scored["score"], match))
@@ -681,7 +772,7 @@ def dashboard():
                 best_pick = _score_match(best_match, target_odds, rss_items, db)
                 match = best_match
             else:
-                match = data[0]
+                match = eligible[0]
             home_team = match.get("home_team", "")
             away_team = match.get("away_team", "")
             outcomes = _extract_h2h_outcomes(match)
@@ -741,7 +832,7 @@ def dashboard():
 
             if tips_requested:
                 target_matches = _select_matches_near_odds(
-                    data, target_odds, rss_items, db, limit=2
+                    eligible, target_odds, rss_items, db, limit=2
                 )
     except Exception:
         pass
