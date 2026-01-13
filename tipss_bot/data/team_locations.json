@@ -1,4 +1,180 @@
 {
+  "Fluminense FC": {
+    "latitude": -10.0,
+    "longitude": -55.0
+  },
+  "CA Mineiro": {
+    "latitude": -10.0,
+    "longitude": -55.0
+  },
+  "Gr\u00eamio FBPA": {
+    "latitude": -10.0,
+    "longitude": -55.0
+  },
+  "CA Paranaense": {
+    "latitude": -10.0,
+    "longitude": -55.0
+  },
+  "SE Palmeiras": {
+    "latitude": -10.0,
+    "longitude": -55.0
+  },
+  "Botafogo FR": {
+    "latitude": -10.0,
+    "longitude": -55.0
+  },
+  "Cruzeiro EC": {
+    "latitude": -10.0,
+    "longitude": -55.0
+  },
+  "Chapecoense AF": {
+    "latitude": -10.0,
+    "longitude": -55.0
+  },
+  "S\u00e3o Paulo FC": {
+    "latitude": -10.0,
+    "longitude": -55.0
+  },
+  "EC Bahia": {
+    "latitude": -10.0,
+    "longitude": -55.0
+  },
+  "SC Corinthians Paulista": {
+    "latitude": -10.0,
+    "longitude": -55.0
+  },
+  "CR Vasco da Gama": {
+    "latitude": -10.0,
+    "longitude": -55.0
+  },
+  "EC Vit\u00f3ria": {
+    "latitude": -10.0,
+    "longitude": -55.0
+  },
+  "CR Flamengo": {
+    "latitude": -10.0,
+    "longitude": -55.0
+  },
+  "Coritiba FBC": {
+    "latitude": -10.0,
+    "longitude": -55.0
+  },
+  "RB Bragantino": {
+    "latitude": -10.0,
+    "longitude": -55.0
+  },
+  "Clube do Remo": {
+    "latitude": -10.0,
+    "longitude": -55.0
+  },
+  "Mirassol FC": {
+    "latitude": -10.0,
+    "longitude": -55.0
+  },
+  "SC Internacional": {
+    "latitude": -10.0,
+    "longitude": -55.0
+  },
+  "Santos FC": {
+    "latitude": -10.0,
+    "longitude": -55.0
+  },
+  "Blackburn Rovers FC": {
+    "latitude": 34.54426,
+    "longitude": -91.96903
+  },
+  "Norwich City FC": {
+    "latitude": 34.54426,
+    "longitude": -91.96903
+  },
+  "Queens Park Rangers FC": {
+    "latitude": 34.54426,
+    "longitude": -91.96903
+  },
+  "Stoke City FC": {
+    "latitude": 34.54426,
+    "longitude": -91.96903
+  },
+  "Swansea City AFC": {
+    "latitude": 53.34061,
+    "longitude": -1.28162
+  },
+  "West Bromwich Albion FC": {
+    "latitude": 34.54426,
+    "longitude": -91.96903
+  },
+  "Hull City AFC": {
+    "latitude": 34.54426,
+    "longitude": -91.96903
+  },
+  "Portsmouth FC": {
+    "latitude": 34.54426,
+    "longitude": -91.96903
+  },
+  "Birmingham City FC": {
+    "latitude": 34.54426,
+    "longitude": -91.96903
+  },
+  "Leicester City FC": {
+    "latitude": 34.54426,
+    "longitude": -91.96903
+  },
+  "Southampton FC": {
+    "latitude": 34.54426,
+    "longitude": -91.96903
+  },
+  "Derby County FC": {
+    "latitude": 34.54426,
+    "longitude": -91.96903
+  },
+  "Middlesbrough FC": {
+    "latitude": 34.54426,
+    "longitude": -91.96903
+  },
+  "Sheffield Wednesday FC": {
+    "latitude": 34.54426,
+    "longitude": -91.96903
+  },
+  "Watford FC": {
+    "latitude": 34.54426,
+    "longitude": -91.96903
+  },
+  "Charlton Athletic FC": {
+    "latitude": 34.54426,
+    "longitude": -91.96903
+  },
+  "Ipswich Town FC": {
+    "latitude": 34.54426,
+    "longitude": -91.96903
+  },
+  "Sheffield United FC": {
+    "latitude": 34.54426,
+    "longitude": -91.96903
+  },
+  "Millwall FC": {
+    "latitude": 34.54426,
+    "longitude": -91.96903
+  },
+  "Bristol City FC": {
+    "latitude": 34.54426,
+    "longitude": -91.96903
+  },
+  "Wrexham AFC": {
+    "latitude": 53.34061,
+    "longitude": -1.28162
+  },
+  "Coventry City FC": {
+    "latitude": 34.54426,
+    "longitude": -91.96903
+  },
+  "Preston North End FC": {
+    "latitude": 34.54426,
+    "longitude": -91.96903
+  },
+  "Oxford United FC": {
+    "latitude": 34.54426,
+    "longitude": -91.96903
+  },
   "Arsenal FC": {
     "latitude": 34.54426,
     "longitude": -91.96903
@@ -79,94 +255,6 @@
     "latitude": 34.54426,
     "longitude": -91.96903
   },
-  "Athletic Club": {
-    "latitude": 43.26271,
-    "longitude": -2.92528
-  },
-  "Club Atl\u00e9tico de Madrid": {
-    "latitude": 40.4165,
-    "longitude": -3.70256
-  },
-  "CA Osasuna": {
-    "latitude": 42.81687,
-    "longitude": -1.64323
-  },
-  "RCD Espanyol de Barcelona": {
-    "latitude": 40.0,
-    "longitude": -4.0
-  },
-  "FC Barcelona": {
-    "latitude": 41.38879,
-    "longitude": 2.15899
-  },
-  "Getafe CF": {
-    "latitude": 40.30571,
-    "longitude": -3.73295
-  },
-  "Real Madrid CF": {
-    "latitude": 40.4165,
-    "longitude": -3.70256
-  },
-  "Rayo Vallecano de Madrid": {
-    "latitude": 40.4165,
-    "longitude": -3.70256
-  },
-  "Levante UD": {
-    "latitude": 39.47391,
-    "longitude": -0.37966
-  },
-  "RCD Mallorca": {
-    "latitude": 39.6078,
-    "longitude": 3.01197
-  },
-  "Real Betis Balompi\u00e9": {
-    "latitude": 37.38283,
-    "longitude": -5.97317
-  },
-  "Real Sociedad de F\u00fatbol": {
-    "latitude": 40.0,
-    "longitude": -4.0
-  },
-  "Villarreal CF": {
-    "latitude": 38.72572,
-    "longitude": -7.21533
-  },
-  "Valencia CF": {
-    "latitude": 39.47391,
-    "longitude": -0.37966
-  },
-  "Deportivo Alav\u00e9s": {
-    "latitude": 40.0,
-    "longitude": -4.0
-  },
-  "Elche CF": {
-    "latitude": 38.26218,
-    "longitude": -0.70107
-  },
-  "Girona FC": {
-    "latitude": 41.98311,
-    "longitude": 2.82493
-  },
-  "RC Celta de Vigo": {
-    "latitude": 42.23282,
-    "longitude": -8.72264
-  },
-  "Sevilla FC": {
-    "latitude": 37.38283,
-    "longitude": -5.97317
-  },
-  "Real Oviedo": {
-    "latitude": 43.36029,
-    "longitude": -5.84476
-  },
-  "1. FC K\u00f6ln": {
-    "latitude": 50.93333,
-    "longitude": 6.95
-  },
-  "TSG 1899 Hoffenheim": {
-    "latitude": 49.29636,
-    "longitude": 8.82254
-  },
   "Bayer 04 Leverkusen": {
     "latitude": 51.0303,
     "longitude": 6.98432
@@ -178,6 +266,274 @@
   "FC Bayern M\u00fcnchen": {
     "latitude": 48.13743,
     "longitude": 11.57549
+  },
+  "Eintracht Frankfurt": {
+    "latitude": 49.98419,
+    "longitude": 8.2791
+  },
+  "Athletic Club": {
+    "latitude": 43.26271,
+    "longitude": -2.92528
+  },
+  "Club Atl\u00e9tico de Madrid": {
+    "latitude": 40.4165,
+    "longitude": -3.70256
+  },
+  "FC Barcelona": {
+    "latitude": 41.38879,
+    "longitude": 2.15899
+  },
+  "Real Madrid CF": {
+    "latitude": 40.4165,
+    "longitude": -3.70256
+  },
+  "Villarreal CF": {
+    "latitude": 38.72572,
+    "longitude": -7.21533
+  },
+  "Atalanta BC": {
+    "latitude": 45.58792,
+    "longitude": 9.60115
+  },
+  "FC Internazionale Milano": {
+    "latitude": 42.83333,
+    "longitude": 12.83333
+  },
+  "Juventus FC": {
+    "latitude": 45.07049,
+    "longitude": 7.68682
+  },
+  "SSC Napoli": {
+    "latitude": 42.83333,
+    "longitude": 12.83333
+  },
+  "Sporting Clube de Portugal": {
+    "latitude": 39.6945,
+    "longitude": -8.13057
+  },
+  "Olympique de Marseille": {
+    "latitude": 43.29695,
+    "longitude": 5.38107
+  },
+  "Paris Saint-Germain FC": {
+    "latitude": 48.85341,
+    "longitude": 2.3488
+  },
+  "AS Monaco FC": {
+    "latitude": 43.73718,
+    "longitude": 7.42145
+  },
+  "Galatasaray SK": {
+    "latitude": 40.69843,
+    "longitude": -74.40154
+  },
+  "Qaraba\u011f A\u011fdam FK": {
+    "latitude": 40.5,
+    "longitude": 47.5
+  },
+  "PAE Olympiakos SFP": {
+    "latitude": 37.94203,
+    "longitude": 23.64619
+  },
+  "PSV": {
+    "latitude": 36.29923,
+    "longitude": -89.75119
+  },
+  "AFC Ajax": {
+    "latitude": 36.29923,
+    "longitude": -89.75119
+  },
+  "Club Brugge KV": {
+    "latitude": 51.20892,
+    "longitude": 3.22424
+  },
+  "FC K\u00f8benhavn": {
+    "latitude": 55.65059,
+    "longitude": 12.5978
+  },
+  "Sport Lisboa e Benfica": {
+    "latitude": 39.6945,
+    "longitude": -8.13057
+  },
+  "Royale Union Saint-Gilloise": {
+    "latitude": 50.75,
+    "longitude": 4.5
+  },
+  "FK Bod\u00f8/Glimt": {
+    "latitude": 67.28267,
+    "longitude": 14.37513
+  },
+  "FK Kairat": {
+    "latitude": 48.0,
+    "longitude": 68.0
+  },
+  "Paphos FC": {
+    "latitude": 35.0,
+    "longitude": 33.0
+  },
+  "Germany": {
+    "latitude": 49.98419,
+    "longitude": 8.2791
+  },
+  "Spain": {
+    "latitude": 42.11254,
+    "longitude": -6.61917
+  },
+  "Portugal": {
+    "latitude": 39.6945,
+    "longitude": -8.13057
+  },
+  "Slovakia": {
+    "latitude": 48.14816,
+    "longitude": 17.10674
+  },
+  "England": {
+    "latitude": 34.54426,
+    "longitude": -91.96903
+  },
+  "France": {
+    "latitude": 48.85341,
+    "longitude": 2.3488
+  },
+  "Slovenia": {
+    "latitude": 46.05108,
+    "longitude": 14.50513
+  },
+  "Serbia": {
+    "latitude": 44.73723,
+    "longitude": 21.41982
+  },
+  "Denmark": {
+    "latitude": 55.6455,
+    "longitude": 12.41008
+  },
+  "Italy": {
+    "latitude": 42.83333,
+    "longitude": 12.83333
+  },
+  "Switzerland": {
+    "latitude": 46.94809,
+    "longitude": 7.44744
+  },
+  "Ukraine": {
+    "latitude": 50.45466,
+    "longitude": 30.5238
+  },
+  "Poland": {
+    "latitude": 52.0,
+    "longitude": 20.0
+  },
+  "Czechia": {
+    "latitude": 49.75,
+    "longitude": 15.0
+  },
+  "Croatia": {
+    "latitude": 45.81444,
+    "longitude": 15.97798
+  },
+  "Turkey": {
+    "latitude": 40.69843,
+    "longitude": -74.40154
+  },
+  "Belgium": {
+    "latitude": 50.85045,
+    "longitude": 4.34878
+  },
+  "Romania": {
+    "latitude": 44.4913,
+    "longitude": 26.03459
+  },
+  "Austria": {
+    "latitude": 47.33333,
+    "longitude": 13.33333
+  },
+  "Hungary": {
+    "latitude": 47.49835,
+    "longitude": 19.04045
+  },
+  "Albania": {
+    "latitude": 41.0,
+    "longitude": 20.0
+  },
+  "Georgia": {
+    "latitude": 41.69411,
+    "longitude": 44.83368
+  },
+  "Netherlands": {
+    "latitude": 36.29923,
+    "longitude": -89.75119
+  },
+  "Scotland": {
+    "latitude": 39.9687,
+    "longitude": -77.58721
+  },
+  "Toulouse FC": {
+    "latitude": 43.60426,
+    "longitude": 1.44367
+  },
+  "Stade Brestois 29": {
+    "latitude": 46.0,
+    "longitude": 2.0
+  },
+  "AJ Auxerre": {
+    "latitude": 47.7996,
+    "longitude": 3.57033
+  },
+  "Lille OSC": {
+    "latitude": 48.36572,
+    "longitude": 4.80474
+  },
+  "OGC Nice": {
+    "latitude": 43.70313,
+    "longitude": 7.26608
+  },
+  "Olympique Lyonnais": {
+    "latitude": 45.74846,
+    "longitude": 4.84671
+  },
+  "FC Lorient": {
+    "latitude": 47.74817,
+    "longitude": -3.37177
+  },
+  "Stade Rennais FC 1901": {
+    "latitude": 48.11198,
+    "longitude": -1.67429
+  },
+  "Angers SCO": {
+    "latitude": 47.47156,
+    "longitude": -0.55202
+  },
+  "Le Havre AC": {
+    "latitude": 49.52564,
+    "longitude": 0.25458
+  },
+  "FC Nantes": {
+    "latitude": 47.21725,
+    "longitude": -1.55336
+  },
+  "FC Metz": {
+    "latitude": 49.11911,
+    "longitude": 6.17269
+  },
+  "Racing Club de Lens": {
+    "latitude": 46.0,
+    "longitude": 2.0
+  },
+  "RC Strasbourg Alsace": {
+    "latitude": 48.58392,
+    "longitude": 7.74553
+  },
+  "Paris FC": {
+    "latitude": 48.85341,
+    "longitude": 2.3488
+  },
+  "1. FC K\u00f6ln": {
+    "latitude": 50.93333,
+    "longitude": 6.95
+  },
+  "TSG 1899 Hoffenheim": {
+    "latitude": 49.29636,
+    "longitude": 8.82254
   },
   "Hamburger SV": {
     "latitude": 53.55073,
@@ -211,10 +567,6 @@
     "latitude": 51.18539,
     "longitude": 6.44172
   },
-  "Eintracht Frankfurt": {
-    "latitude": 49.98419,
-    "longitude": 8.2791
-  },
   "FC St. Pauli 1910": {
     "latitude": 53.55073,
     "longitude": 9.99302
@@ -243,10 +595,6 @@
     "latitude": 42.83333,
     "longitude": 12.83333
   },
-  "Atalanta BC": {
-    "latitude": 45.58792,
-    "longitude": 9.60115
-  },
   "Bologna FC 1909": {
     "latitude": 44.49381,
     "longitude": 11.33875
@@ -259,14 +607,6 @@
     "latitude": 42.83333,
     "longitude": 12.83333
   },
-  "FC Internazionale Milano": {
-    "latitude": 42.83333,
-    "longitude": 12.83333
-  },
-  "Juventus FC": {
-    "latitude": 45.07049,
-    "longitude": 7.68682
-  },
   "SS Lazio": {
     "latitude": 42.06246,
     "longitude": 12.39435
@@ -274,10 +614,6 @@
   "Parma Calcio 1913": {
     "latitude": 44.79935,
     "longitude": 10.32618
-  },
-  "SSC Napoli": {
-    "latitude": 42.83333,
-    "longitude": 12.83333
   },
   "Udinese Calcio": {
     "latitude": 46.0693,
@@ -311,76 +647,132 @@
     "latitude": 45.80819,
     "longitude": 9.0832
   },
-  "Toulouse FC": {
-    "latitude": 43.60426,
-    "longitude": 1.44367
+  "FC Twente '65": {
+    "latitude": 36.29923,
+    "longitude": -89.75119
   },
-  "Stade Brestois 29": {
-    "latitude": 46.0,
-    "longitude": 2.0
+  "SBV Excelsior": {
+    "latitude": 36.29923,
+    "longitude": -89.75119
   },
-  "Olympique de Marseille": {
-    "latitude": 43.29695,
-    "longitude": 5.38107
+  "Heracles Almelo": {
+    "latitude": 36.29923,
+    "longitude": -89.75119
   },
-  "AJ Auxerre": {
-    "latitude": 47.7996,
-    "longitude": 3.57033
+  "SC Heerenveen": {
+    "latitude": 36.29923,
+    "longitude": -89.75119
   },
-  "Lille OSC": {
-    "latitude": 48.36572,
-    "longitude": 4.80474
+  "Feyenoord Rotterdam": {
+    "latitude": 36.29923,
+    "longitude": -89.75119
   },
-  "OGC Nice": {
-    "latitude": 43.70313,
-    "longitude": 7.26608
+  "FC Utrecht": {
+    "latitude": 36.29923,
+    "longitude": -89.75119
   },
-  "Olympique Lyonnais": {
-    "latitude": 45.74846,
-    "longitude": 4.84671
+  "FC Groningen": {
+    "latitude": 36.29923,
+    "longitude": -89.75119
   },
-  "Paris Saint-Germain FC": {
-    "latitude": 48.85341,
-    "longitude": 2.3488
+  "NAC Breda": {
+    "latitude": 36.29923,
+    "longitude": -89.75119
   },
-  "FC Lorient": {
-    "latitude": 47.74817,
-    "longitude": -3.37177
+  "AZ": {
+    "latitude": 36.29923,
+    "longitude": -89.75119
   },
-  "Stade Rennais FC 1901": {
-    "latitude": 48.11198,
-    "longitude": -1.67429
+  "PEC Zwolle": {
+    "latitude": 36.29923,
+    "longitude": -89.75119
   },
-  "Angers SCO": {
-    "latitude": 47.47156,
-    "longitude": -0.55202
+  "Go Ahead Eagles": {
+    "latitude": 36.29923,
+    "longitude": -89.75119
   },
-  "Le Havre AC": {
-    "latitude": 49.52564,
-    "longitude": 0.25458
+  "Telstar 1963": {
+    "latitude": 36.29923,
+    "longitude": -89.75119
   },
-  "FC Nantes": {
-    "latitude": 47.21725,
-    "longitude": -1.55336
+  "NEC": {
+    "latitude": 36.29923,
+    "longitude": -89.75119
   },
-  "FC Metz": {
-    "latitude": 49.11911,
-    "longitude": 6.17269
+  "FC Volendam": {
+    "latitude": 36.29923,
+    "longitude": -89.75119
   },
-  "Racing Club de Lens": {
-    "latitude": 46.0,
-    "longitude": 2.0
+  "Fortuna Sittard": {
+    "latitude": 36.29923,
+    "longitude": -89.75119
   },
-  "AS Monaco FC": {
-    "latitude": 43.73718,
-    "longitude": 7.42145
+  "Sparta Rotterdam": {
+    "latitude": 36.29923,
+    "longitude": -89.75119
   },
-  "RC Strasbourg Alsace": {
-    "latitude": 48.58392,
-    "longitude": 7.74553
+  "Rio Ave FC": {
+    "latitude": 39.6945,
+    "longitude": -8.13057
   },
-  "Paris FC": {
-    "latitude": 48.85341,
-    "longitude": 2.3488
+  "FC Porto": {
+    "latitude": 41.14961,
+    "longitude": -8.61099
+  },
+  "GD Estoril Praia": {
+    "latitude": 38.70571,
+    "longitude": -9.39773
+  },
+  "Moreirense FC": {
+    "latitude": 39.6945,
+    "longitude": -8.13057
+  },
+  "FC Arouca": {
+    "latitude": 40.93057,
+    "longitude": -8.24488
+  },
+  "CD Tondela": {
+    "latitude": 40.51682,
+    "longitude": -8.08087
+  },
+  "CD Nacional": {
+    "latitude": 32.66568,
+    "longitude": -16.92547
+  },
+  "CD Santa Clara": {
+    "latitude": 39.2987,
+    "longitude": -9.1573
+  },
+  "FC Famalic\u00e3o": {
+    "latitude": 39.6945,
+    "longitude": -8.13057
+  },
+  "Gil Vicente FC": {
+    "latitude": 41.53174,
+    "longitude": -8.61843
+  },
+  "Vit\u00f3ria SC": {
+    "latitude": 41.44443,
+    "longitude": -8.29619
+  },
+  "Sporting Clube de Braga": {
+    "latitude": 41.55032,
+    "longitude": -8.42005
+  },
+  "Casa Pia AC": {
+    "latitude": 39.6945,
+    "longitude": -8.13057
+  },
+  "FC Alverca": {
+    "latitude": 39.6945,
+    "longitude": -8.13057
+  },
+  "CF Estrela da Amadora": {
+    "latitude": 39.6945,
+    "longitude": -8.13057
+  },
+  "AVS": {
+    "latitude": 39.6945,
+    "longitude": -8.13057
   }
 }
