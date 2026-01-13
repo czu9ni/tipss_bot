@@ -63,6 +63,9 @@ def _load_rss_sources() -> list[dict]:
             with open(path, "r", encoding="utf-8") as handle:
                 data = json.load(handle)
                 if isinstance(data, list):
+                    max_sources = int(os.environ.get("RSS_MAX_SOURCES", "0"))
+                    if max_sources > 0:
+                        return data[:max_sources]
                     return data
         except Exception:
             return RSS_FEEDS
@@ -102,6 +105,8 @@ def _fetch_rss_items() -> list[dict]:
     items: list[dict] = []
     for source in _load_rss_sources():
         url = source.get("url", "")
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            continue
         weight = float(source.get("weight", 0.5))
         try:
             response = requests.get(url, timeout=8)
@@ -112,6 +117,9 @@ def _fetch_rss_items() -> list[dict]:
                     items.append(item)
         except Exception:
             pass
+    max_items = int(os.environ.get("RSS_MAX_ITEMS", "0"))
+    if max_items > 0:
+        items = items[:max_items]
 
     _RSS_CACHE["fetched_at"] = now
     _RSS_CACHE["items"] = items
@@ -330,9 +338,9 @@ def _fetch_sports_keys(api_key: str) -> list[str]:
     return keys
 
 
-def _fetch_odds_matches(api_key: str) -> list[dict]:
+def _fetch_odds_matches(api_key: str, keys: list[str] | None = None) -> list[dict]:
     matches: list[dict] = []
-    keys = _fetch_sports_keys(api_key)
+    keys = keys or _fetch_sports_keys(api_key)
     max_sports = int(os.environ.get("ODDS_MAX_SPORTS", "0"))
     if max_sports > 0:
         keys = keys[:max_sports]
@@ -384,8 +392,8 @@ TEMPLATE = """
                         <h5 class="mb-0">API Status</h5>
                     </div>
                     <div class="card-body">
-                        <p><strong>Odds API:</strong> {{ odds_key[:4] }}...</p>
-                        <p><strong>Football Data:</strong> {{ football_key[:4] }}...</p>
+                        <p><strong>Odds API:</strong> {{ "Configured" if odds_configured else "Missing" }}</p>
+                        <p><strong>Football Data:</strong> {{ "Configured" if football_configured else "Missing" }}</p>
                         <p><strong>Weather:</strong> Open-Meteo (no key)</p>
                         <p><strong>News:</strong> RSS feeds (no key)</p>
                     </div>
@@ -532,9 +540,9 @@ TEMPLATE = """
                                 </tr>
                             </thead>
                             <tbody>
-                                {% for i, (team, points) in enumerate(points_table, 1) %}
+                                {% for team, points in points_table %}
                                 <tr>
-                                    <td>{{ i }}</td>
+                                    <td>{{ loop.index }}</td>
                                     <td>{{ team }}</td>
                                     <td><span class="badge bg-success">{{ points }}</span></td>
                                 </tr>
@@ -617,7 +625,10 @@ def dashboard():
     target_matches = []
     rss_items: list[dict] = []
     try:
-        data = _fetch_odds_matches(config.odds_api_key)
+        if tips_requested:
+            data = _fetch_odds_matches(config.odds_api_key)
+        else:
+            data = _fetch_odds_matches(config.odds_api_key, keys=["soccer_epl"])
         if data:
             rss_items = _fetch_rss_items()
             scored_candidates = []
@@ -691,8 +702,8 @@ def dashboard():
         pass
 
     return render_template_string(TEMPLATE,
-                                  odds_key=config.odds_api_key,
-                                  football_key=config.football_data_token,
+                                  odds_configured=bool(config.odds_api_key),
+                                  football_configured=bool(config.football_data_token),
                                   competitions=competitions,
                                   odds=odds_data,
                                   tips_requested=tips_requested,
@@ -701,4 +712,5 @@ def dashboard():
                                   points_table=points_table)
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+    app.run(debug=debug)

@@ -17,8 +17,8 @@ def main() -> None:
         print("API client initialized.")
     else:
         print("API client not configured (SOCCER_API_BASE_URL/SOCCER_API_KEY missing).")
-    print(f"ODDS_API_KEY loaded: {config.odds_api_key[:4]}...")
-    print(f"FOOTBALL_DATA_TOKEN loaded: {config.football_data_token[:4]}...")
+    print("ODDS_API_KEY loaded.")
+    print("FOOTBALL_DATA_TOKEN loaded.")
     if config.weather_api_key:
         print(f"WEATHER_API_KEY loaded: {config.weather_api_key[:4]}...")
     else:
