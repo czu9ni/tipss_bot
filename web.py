@@ -1,4 +1,6 @@
 from flask import Flask, render_template_string
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from soccer_bot.config import load_config
 from soccer_bot.db import connect
 from soccer_bot.repo import Match, add_match, list_matches
@@ -6,7 +8,7 @@ from soccer_bot.scoring import table
 import requests
 
 app = Flask(__name__)
-
+limiter = Limiter(get_remote_address, app=app, default_limits=["200 per day", "50 per hour"])
 config = load_config()
 
 # HTML template
