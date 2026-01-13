@@ -12,6 +12,10 @@ def main() -> None:
     api_config = ApiConfig(base_url=config.api_base_url, api_key=config.api_key)
     client = SoccerApiClient(api_config)
     print("API client initialized.")
+    print(f"ODDS_API_KEY loaded: {config.odds_api_key[:4]}...")
+    print(f"FOOTBALL_DATA_TOKEN loaded: {config.football_data_token[:4]}...")
+    print(f"WEATHER_API_KEY loaded: {config.weather_api_key[:4]}...")
+    print(f"NEWS_API_KEY loaded: {config.news_api_key[:4]}...")
 
     # Demo: Database operations
     db = connect(config.db_url)
