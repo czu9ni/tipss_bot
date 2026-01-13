@@ -363,15 +363,15 @@ def _score_match(
 def _match_reasons(pick: dict) -> list[str]:
     reasons = []
     if pick.get("odds_score", 0) >= 0.85:
-        reasons.append("odds near 2.00")
+        reasons.append("odds 2.00-hoz kozeli")
     if pick.get("news_score", 0) >= 0.05:
-        reasons.append("positive news")
+        reasons.append("pozitiv hirek")
     if pick.get("stats_factor", 0) >= 0.05:
-        reasons.append("form edge")
+        reasons.append("jobb forma")
     if pick.get("weather_score", 0) < 0:
-        reasons.append("rain risk")
+        reasons.append("eso kockazat")
     if not reasons:
-        reasons.append("balanced signals")
+        reasons.append("kiegyensulyozott jelek")
     return reasons
 
 
