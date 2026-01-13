@@ -15,7 +15,7 @@ class Match:
 
 def add_match(db: Database, match: Match) -> int:
     cursor = db.connection.execute(
-        "INSERT INTO matches (home_team, away_team, home_score, away_score, date) VALUES (?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO matches (home_team, away_team, home_score, away_score, date) VALUES (?, ?, ?, ?, ?)",
         (match.home_team, match.away_team, match.home_score, match.away_score, match.date),
     )
     db.connection.commit()

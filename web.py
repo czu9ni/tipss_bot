@@ -596,17 +596,19 @@ def dashboard():
 
     db = connect(config.db_url)
     db.ensure_schema()
-    sample_matches = [
-        Match("Team A", "Team B", 2, 1, "2023-01-01"),
-        Match("Team A", "Team C", 1, 1, "2023-01-02"),
-        Match("Team B", "Team C", 0, 3, "2023-01-03"),
-    ]
-    for match in sample_matches:
-        try:
-            add_match(db, match)
-        except Exception:
-            pass  # Already exists
     matches = list_matches(db)
+    if not matches:
+        sample_matches = [
+            Match("Team A", "Team B", 2, 1, "2023-01-01"),
+            Match("Team A", "Team C", 1, 1, "2023-01-02"),
+            Match("Team B", "Team C", 0, 3, "2023-01-03"),
+        ]
+        for match in sample_matches:
+            try:
+                add_match(db, match)
+            except Exception:
+                pass  # Already exists
+        matches = list_matches(db)
     points_table = sorted(table(matches).items(), key=lambda x: x[1], reverse=True)
 
     # Fetch competitions
