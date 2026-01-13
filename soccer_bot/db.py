@@ -20,6 +20,22 @@ class Database:
             )
             """
         )
+        self.connection.execute(
+            """
+            DELETE FROM matches
+            WHERE id NOT IN (
+                SELECT MIN(id)
+                FROM matches
+                GROUP BY home_team, away_team, date
+            )
+            """
+        )
+        self.connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS matches_unique
+            ON matches (home_team, away_team, date)
+            """
+        )
         self.connection.commit()
 
 
