@@ -12,65 +12,159 @@ config = load_config()
 # HTML template
 TEMPLATE = """
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Soccer Bot - Tips</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Soccer Bot - Professional AI Tips Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        .section { margin-bottom: 30px; }
-        .tip { font-weight: bold; color: green; }
-        table { border-collapse: collapse; width: 100%; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-        th { background-color: #f2f2f2; }
+        .hero { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 60px 0; }
+        .card { border: none; box-shadow: 0 4px 8px rgba(0,0,0,0.1); transition: transform 0.2s; }
+        .card:hover { transform: translateY(-5px); }
+        .tip-highlight { background-color: #e8f5e8; border-left: 5px solid #28a745; }
+        .odds-table th { background-color: #f8f9fa; }
+        .badge { font-size: 0.9em; }
+        .ai-tip { font-size: 1.2em; font-weight: bold; }
     </style>
 </head>
 <body>
-    <h1>Soccer Bot Dashboard</h1>
-
-    <div class="section">
-        <h2>API Keys Loaded</h2>
-        <p>ODDS_API_KEY: {{ odds_key[:4] }}...</p>
-        <p>FOOTBALL_DATA_TOKEN: {{ football_key[:4] }}...</p>
-        <p>WEATHER_API_KEY: {{ weather_key[:4] }}...</p>
-        <p>NEWS_API_KEY: {{ news_key[:4] }}...</p>
+    <div class="hero text-center">
+        <div class="container">
+            <h1 class="display-4">⚽ Soccer Bot AI Dashboard</h1>
+            <p class="lead">Advanced Football Predictions & Analytics</p>
+        </div>
     </div>
 
-    <div class="section">
-        <h2>Competitions (Football Data API)</h2>
-        <ul>
-        {% for comp in competitions %}
-            <li>{{ comp.name }} ({{ comp.code }})</li>
-        {% endfor %}
-        </ul>
+    <div class="container my-5">
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card mb-4">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="mb-0">🔑 API Status</h5>
+                    </div>
+                    <div class="card-body">
+                        <p><strong>Odds API:</strong> {{ odds_key[:4] }}... ✅</p>
+                        <p><strong>Football Data:</strong> {{ football_key[:4] }}... ✅</p>
+                        <p><strong>Weather API:</strong> {{ weather_key[:4] }}... ✅</p>
+                        <p><strong>News API:</strong> {{ news_key[:4] }}... ✅</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card mb-4">
+                    <div class="card-header bg-success text-white">
+                        <h5 class="mb-0">🏆 Active Competitions</h5>
+                    </div>
+                    <div class="card-body">
+                        <ul class="list-group list-group-flush">
+                        {% for comp in competitions %}
+                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                {{ comp.name }}
+                                <span class="badge bg-secondary rounded-pill">{{ comp.code }}</span>
+                            </li>
+                        {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-12">
+                <div class="card mb-4 tip-highlight">
+                    <div class="card-header bg-warning text-dark">
+                        <h5 class="mb-0">🎯 Live Match Odds & AI Prediction</h5>
+                    </div>
+                    <div class="card-body">
+                        {% if odds %}
+                        <h6 class="text-center mb-3">{{ odds.home_team }} vs {{ odds.away_team }}</h6>
+                        <table class="table table-striped odds-table text-center">
+                            <thead>
+                                <tr>
+                                    <th>Home Win</th>
+                                    <th>Draw</th>
+                                    <th>Away Win</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><strong>{{ "%.2f"|format(odds.home_odds) }}</strong></td>
+                                    <td><strong>{{ "%.2f"|format(odds.draw_odds) }}</strong></td>
+                                    <td><strong>{{ "%.2f"|format(odds.away_odds) }}</strong></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <div class="alert alert-success text-center">
+                            <h5 class="ai-tip">🤖 AI Recommendation: {{ odds.tip }}</h5>
+                        </div>
+                        {% else %}
+                        <p class="text-muted text-center">No live odds available at the moment.</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card mb-4">
+                    <div class="card-header bg-info text-white">
+                        <h5 class="mb-0">📊 Recent Matches</h5>
+                    </div>
+                    <div class="card-body">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Home</th>
+                                    <th>Away</th>
+                                    <th>Score</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for match in matches %}
+                                <tr>
+                                    <td>{{ match.home_team }}</td>
+                                    <td>{{ match.away_team }}</td>
+                                    <td><span class="badge bg-primary">{{ match.home_score }}-{{ match.away_score }}</span></td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card mb-4">
+                    <div class="card-header bg-danger text-white">
+                        <h5 class="mb-0">🏅 League Standings</h5>
+                    </div>
+                    <div class="card-body">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Pos</th>
+                                    <th>Team</th>
+                                    <th>Pts</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for i, (team, points) in enumerate(points_table, 1) %}
+                                <tr>
+                                    <td>{{ i }}</td>
+                                    <td>{{ team }}</td>
+                                    <td><span class="badge bg-success">{{ points }}</span></td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
-    <div class="section">
-        <h2>Latest Odds & Tip</h2>
-        {% if odds %}
-        <p>Match: {{ odds.home_team }} vs {{ odds.away_team }}</p>
-        <p>Odds: Home {{ odds.home_odds }}, Draw {{ odds.draw_odds }}, Away {{ odds.away_odds }}</p>
-        <p class="tip">Tip: {{ odds.tip }}</p>
-        {% else %}
-        <p>No odds available.</p>
-        {% endif %}
-    </div>
-
-    <div class="section">
-        <h2>Sample Matches & Table</h2>
-        <table>
-            <tr><th>Home</th><th>Away</th><th>Score</th></tr>
-            {% for match in matches %}
-            <tr><td>{{ match.home_team }}</td><td>{{ match.away_team }}</td><td>{{ match.home_score }}-{{ match.away_score }}</td></tr>
-            {% endfor %}
-        </table>
-        <h3>Points Table</h3>
-        <table>
-            <tr><th>Team</th><th>Points</th></tr>
-            {% for team, points in points_table %}
-            <tr><td>{{ team }}</td><td>{{ points }}</td></tr>
-            {% endfor %}
-        </table>
-    </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
 """
