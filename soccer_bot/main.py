@@ -20,8 +20,8 @@ def main() -> None:
     print(f"NEWS_API_KEY loaded: {config.news_api_key[:4]}...")
 
     # Actual API call demo: Fetch competitions from Football Data API
+    headers = {"X-Auth-Token": config.football_data_token}
     try:
-        headers = {"X-Auth-Token": config.football_data_token}
         response = requests.get("https://api.football-data.org/v4/competitions", headers=headers, timeout=10)
         if response.status_code == 200:
             data = response.json()
@@ -30,6 +30,9 @@ def main() -> None:
                 print(f"- {comp['name']} ({comp['code']})")
         else:
             print(f"\nFootball Data API error: {response.status_code}")
+    except Exception as e:
+        print(f"\nFootball Data API call failed: {e}")
+
     # Actual tip generation: Fetch odds and give a simple tip
     try:
         odds_url = "https://api.the-odds-api.com/v4/sports/soccer_epl/odds"
@@ -57,6 +60,8 @@ def main() -> None:
             print(f"\nOdds API error: {response.status_code}")
     except Exception as e:
         print(f"\nOdds API call failed: {e}")
+
+    # Stress test: Multiple API calls
     print("\nStarting stress test: 5 quick API calls...")
     for i in range(5):
         try:
