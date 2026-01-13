@@ -8,7 +8,7 @@ class AppConfig(BaseModel):
     api_key: str = Field(default="", description="API key for general API (optional)")
     odds_api_key: str = Field(..., min_length=10, description="Odds API key")
     football_data_token: str = Field(..., min_length=10, description="Football Data token")
-    log_level: str = Field(default="INFO", regex="^(DEBUG|INFO|WARNING|ERROR)$", description="Logging level")
+    log_level: str = Field(default="INFO", pattern="^(DEBUG|INFO|WARNING|ERROR)$", description="Logging level")
 
 
 REQUIRED_ENV_VARS = ("SOCCER_DB_URL", "ODDS_API_KEY", "FOOTBALL_DATA_TOKEN")
