@@ -272,16 +272,16 @@
     "longitude": 8.2791
   },
   "Athletic Club": {
-    "latitude": 43.26271,
-    "longitude": -2.92528
+    "latitude": 40.99056,
+    "longitude": -3.70578
   },
   "Club Atl\u00e9tico de Madrid": {
     "latitude": 40.4165,
     "longitude": -3.70256
   },
   "FC Barcelona": {
-    "latitude": 41.38879,
-    "longitude": 2.15899
+    "latitude": 41.37938,
+    "longitude": 2.12461
   },
   "Real Madrid CF": {
     "latitude": 40.4165,
@@ -1626,5 +1626,53 @@
   "Zaragoza": {
     "latitude": 41.65606,
     "longitude": -0.87734
+  },
+  "CA Osasuna": {
+    "latitude": 42.81687,
+    "longitude": -1.64323
+  },
+  "Getafe CF": {
+    "latitude": 40.30571,
+    "longitude": -3.73295
+  },
+  "Rayo Vallecano de Madrid": {
+    "latitude": 40.4165,
+    "longitude": -3.70256
+  },
+  "Levante UD": {
+    "latitude": 39.47391,
+    "longitude": -0.37966
+  },
+  "RCD Mallorca": {
+    "latitude": 39.6078,
+    "longitude": 3.01197
+  },
+  "Real Betis Balompi\u00e9": {
+    "latitude": 37.38283,
+    "longitude": -5.97317
+  },
+  "Valencia CF": {
+    "latitude": 39.47391,
+    "longitude": -0.37966
+  },
+  "Elche CF": {
+    "latitude": 38.26218,
+    "longitude": -0.70107
+  },
+  "Girona FC": {
+    "latitude": 41.98311,
+    "longitude": 2.82493
+  },
+  "RC Celta de Vigo": {
+    "latitude": 42.23282,
+    "longitude": -8.72264
+  },
+  "Sevilla FC": {
+    "latitude": 37.38283,
+    "longitude": -5.97317
+  },
+  "Real Oviedo": {
+    "latitude": 43.36029,
+    "longitude": -5.84476
   }
 }

@@ -24,6 +24,7 @@ RSS_CACHE_TTL_SECONDS = 600
 _RSS_CACHE: dict[str, object] = {"fetched_at": 0.0, "items": []}
 _GEOCODE_CACHE: dict[str, dict] = {}
 _WEATHER_CACHE: dict[str, dict] = {}
+_WEIGHTS_CACHE: dict[str, float] | None = None
 _TEAM_LOCATION_OVERRIDES: dict[str, dict] | None = None
 _SPORTS_CACHE: dict[str, object] = {"fetched_at": 0.0, "keys": []}
 SPORTS_CACHE_TTL_SECONDS = 3600
@@ -66,6 +67,30 @@ def _load_rss_sources() -> list[dict]:
         except Exception:
             return RSS_FEEDS
     return RSS_FEEDS
+
+
+def _load_weights() -> dict[str, float]:
+    global _WEIGHTS_CACHE
+    if _WEIGHTS_CACHE is not None:
+        return _WEIGHTS_CACHE
+    defaults = {
+        "odds_distance": 0.5,
+        "implied_prob": 0.2,
+        "news": 0.2,
+        "weather": 0.05,
+        "stats": 0.05,
+    }
+    path = os.path.join("data", "weights.json")
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+                if isinstance(data, dict):
+                    defaults.update({k: float(v) for k, v in data.items() if k in defaults})
+        except Exception:
+            pass
+    _WEIGHTS_CACHE = defaults
+    return defaults
 
 
 def _fetch_rss_items() -> list[dict]:
@@ -222,12 +247,13 @@ def _score_match(
     weather_score = _weather_factor(home_team)
     stats = get_team_stats(db, home_team)
     stats_factor = stats["win_rate"] * 0.1
+    weights = _load_weights()
     total = (
-        odds_score * 0.5
-        + implied_prob * 0.2
-        + news_score * 0.2
-        + weather_score * 0.05
-        + stats_factor * 0.05
+        odds_score * weights["odds_distance"]
+        + implied_prob * weights["implied_prob"]
+        + news_score * weights["news"]
+        + weather_score * weights["weather"]
+        + stats_factor * weights["stats"]
     )
     return {
         "home_team": home_team,

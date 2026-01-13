@@ -1,0 +1,7 @@
+﻿{
+  "odds_distance": 0.5,
+  "implied_prob": 0.2,
+  "news": 0.2,
+  "weather": 0.05,
+  "stats": 0.05
+}
