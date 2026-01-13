@@ -353,7 +353,61 @@ def _score_match(
         "odds": best["price"],
         "distance": best["distance"],
         "score": total,
+        "odds_score": odds_score,
+        "news_score": news_score,
+        "weather_score": weather_score,
+        "stats_factor": stats_factor,
     }
+
+
+def _match_reasons(pick: dict) -> list[str]:
+    reasons = []
+    if pick.get("odds_score", 0) >= 0.85:
+        reasons.append("odds near 2.00")
+    if pick.get("news_score", 0) >= 0.05:
+        reasons.append("positive news")
+    if pick.get("stats_factor", 0) >= 0.05:
+        reasons.append("form edge")
+    if pick.get("weather_score", 0) < 0:
+        reasons.append("rain risk")
+    if not reasons:
+        reasons.append("balanced signals")
+    return reasons
+
+
+def _combine_score(pick_a: dict, pick_b: dict, target: float) -> tuple[float, float]:
+    combined_odds = float(pick_a["odds"]) * float(pick_b["odds"])
+    base = (float(pick_a["score"]) + float(pick_b["score"])) / 2
+    distance_factor = max(0.0, 1.0 - abs(combined_odds - target) / 0.3)
+    combo_score = base * 0.8 + distance_factor * 0.2
+    return combo_score, combined_odds
+
+
+def _risk_label(score: float) -> str:
+    if score >= 0.85:
+        return "green"
+    if score >= 0.69:
+        return "yellow"
+    return "red"
+
+
+def _build_best_combo(picks: list[dict], target: float) -> dict | None:
+    picks = sorted(picks, key=lambda item: item["score"], reverse=True)[:30]
+    best = None
+    for i in range(len(picks)):
+        for j in range(i + 1, len(picks)):
+            score, combined_odds = _combine_score(picks[i], picks[j], target)
+            if not (1.85 <= combined_odds <= 2.15):
+                continue
+            combo = {
+                "matches": [picks[i], picks[j]],
+                "combined_odds": combined_odds,
+                "score": score,
+                "risk": _risk_label(score),
+            }
+            if best is None or combo["score"] > best["score"]:
+                best = combo
+    return best
 def _extract_h2h_outcomes(match: dict) -> list[dict]:
     for bookmaker in match.get("bookmakers", []):
         for market in bookmaker.get("markets", []):
@@ -457,6 +511,9 @@ TEMPLATE = """
         .odds-table th { background-color: #f8f9fa; }
         .badge { font-size: 0.9em; }
         .ai-tip { font-size: 1.2em; font-weight: bold; }
+        .risk-green { background-color: #d4edda; }
+        .risk-yellow { background-color: #fff3cd; }
+        .risk-red { background-color: #f8d7da; }
     </style>
 </head>
 <body>
@@ -541,32 +598,40 @@ TEMPLATE = """
             <div class="col-12">
                 <div class="card mb-4">
                     <div class="card-header bg-dark text-white">
-                        <h5 class="mb-0">Best Pick (Weighted, Next 24h, Non-Rivalry)</h5>
+                        <h5 class="mb-0">Best 2-Match Combo (24h, Non-Rivalry, ~2.00)</h5>
                     </div>
                     <div class="card-body">
-                        {% if best_pick %}
+                        {% if best_combo %}
                             <p class="text-center mb-2">
-                                <strong>{{ best_pick.home_team }} vs {{ best_pick.away_team }}</strong>
+                                <strong>Combined Odds: {{ "%.2f"|format(best_combo.combined_odds) }}</strong>
                             </p>
                             <table class="table table-striped text-center">
                                 <thead>
                                     <tr>
+                                        <th>Match</th>
                                         <th>Outcome</th>
                                         <th>Odds</th>
                                         <th>Score</th>
+                                        <th>Risk</th>
+                                        <th>Why</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <tr>
-                                        <td>{{ best_pick.outcome }}</td>
-                                        <td><strong>{{ "%.2f"|format(best_pick.odds) }}</strong></td>
-                                        <td>{{ "%.2f"|format(best_pick.score) }}</td>
+                                    {% for pick in best_combo.matches %}
+                                    <tr class="risk-{{ best_combo.risk }}">
+                                        <td>{{ pick.home_team }} vs {{ pick.away_team }}</td>
+                                        <td>{{ pick.outcome }}</td>
+                                        <td><strong>{{ "%.2f"|format(pick.odds) }}</strong></td>
+                                        <td>{{ "%.2f"|format(pick.score) }}</td>
+                                        <td>{{ best_combo.risk }}</td>
+                                        <td>{{ ", ".join(_match_reasons(pick)) }}</td>
                                     </tr>
+                                    {% endfor %}
                                 </tbody>
                             </table>
                             <p class="text-muted text-center">Odds pool: {{ odds_count }} matches (24h, non-rivalry)</p>
                         {% else %}
-                            <p class="text-muted text-center">No best pick available.</p>
+                            <p class="text-muted text-center">No valid 2-match combo within 2.00 ± 0.15.</p>
                         {% endif %}
                     </div>
                 </div>
@@ -747,6 +812,7 @@ def dashboard():
     rss_items: list[dict] = []
     odds_count = 0
     best_pick = None
+    best_combo = None
     try:
         data = _fetch_odds_matches(config.odds_api_key)
         eligible = []
@@ -767,6 +833,13 @@ def dashboard():
                 scored = _score_match(match, target_odds, rss_items, db)
                 if scored:
                     scored_candidates.append((scored["score"], match))
+            picks = [
+                _score_match(match, target_odds, rss_items, db)
+                for match in eligible
+            ]
+            picks = [pick for pick in picks if pick]
+            if picks:
+                best_combo = _build_best_combo(picks, target_odds)
             if scored_candidates:
                 best_match = max(scored_candidates, key=lambda item: item[0])[1]
                 best_pick = _score_match(best_match, target_odds, rss_items, db)
@@ -843,11 +916,13 @@ def dashboard():
                                   competitions=competitions,
                                   odds=odds_data,
                                   best_pick=best_pick,
+                                  best_combo=best_combo,
                                   odds_count=odds_count,
                                   tips_requested=tips_requested,
                                   target_matches=target_matches,
                                   matches=matches,
-                                  points_table=points_table)
+                                  points_table=points_table,
+                                  _match_reasons=_match_reasons)
 
 if __name__ == '__main__':
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
