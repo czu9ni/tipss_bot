@@ -198,20 +198,57 @@ def dashboard():
                 home_odds = next(o['price'] for o in odds if o['name'] == home_team)
                 away_odds = next(o['price'] for o in odds if o['name'] == away_team)
                 draw_odds = next(o['price'] for o in odds if o['name'] == 'Draw')
-                # AI-weighted tip calculation
+                # Enhanced AI tip with weather and news factors
                 home_prob = 1 / home_odds
                 away_prob = 1 / away_odds
                 draw_prob = 1 / draw_odds
-                # Weights: probability 40%, favorite bonus 10%, draw 20%
                 home_score = home_prob * 0.4 + (1 if home_odds < 2.5 else 0) * 0.1
                 away_score = away_prob * 0.4 + (1 if away_odds < 2.5 else 0) * 0.1
                 draw_score = draw_prob * 0.2
-                if home_score > away_score and home_score > draw_score:
-                    tip = "Home win (AI-weighted analysis)"
-                elif away_score > home_score and away_score > draw_score:
-                    tip = "Away win (AI-weighted analysis)"
+
+                # Weather factor (mock for Manchester)
+                weather_factor = 0
+                if 'Manchester' in home_team or 'Manchester' in away_team:
+                    try:
+                        weather_response = requests.get(f"https://api.openweathermap.org/data/2.5/weather?q=Manchester&appid={config.weather_api_key}", timeout=5)
+                        if weather_response.status_code == 200:
+                            weather_data = weather_response.json()
+                            if 'rain' in weather_data.get('weather', [{}])[0].get('main', '').lower():
+                                weather_factor = -0.1  # Rain reduces scoring
+                    except:
+                        pass
+
+                # News factor (mock sentiment)
+                news_factor = 0
+                try:
+                    news_response = requests.get(f"https://newsapi.org/v2/everything?q={home_team}&apiKey={config.news_api_key}&pageSize=5", timeout=5)
+                    if news_response.status_code == 200:
+                        news_data = news_response.json()
+                        articles = news_data.get('articles', [])
+                        negative_words = ['injury', 'suspension', 'loss', 'defeat']
+                        positive_words = ['win', 'victory', 'goal']
+                        sentiment = 0
+                        for article in articles:
+                            title = article.get('title', '').lower()
+                            if any(word in title for word in negative_words):
+                                sentiment -= 0.02
+                            if any(word in title for word in positive_words):
+                                sentiment += 0.02
+                        news_factor = sentiment
+                except:
+                    pass
+
+                # Final scores with factors
+                home_final = home_score + weather_factor + news_factor
+                away_final = away_score + weather_factor + news_factor
+                draw_final = draw_score
+
+                if home_final > away_final and home_final > draw_final:
+                    tip = f"Home win (AI: prob {home_prob:.2f}, weather {weather_factor:.2f}, news {news_factor:.2f})"
+                elif away_final > home_final and away_final > draw_final:
+                    tip = f"Away win (AI: prob {away_prob:.2f}, weather {weather_factor:.2f}, news {news_factor:.2f})"
                 else:
-                    tip = "Draw (AI-weighted analysis)"
+                    tip = f"Draw (AI: prob {draw_prob:.2f}, weather {weather_factor:.2f}, news {news_factor:.2f})"
                 odds_data = {
                     'home_team': home_team,
                     'away_team': away_team,
