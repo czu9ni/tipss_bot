@@ -2,7 +2,7 @@ from soccer_bot.api import ApiConfig, SoccerApiClient
 from soccer_bot.config import load_config
 from soccer_bot.db import connect
 from soccer_bot.logging import configure_logging
-from soccer_bot.repo import add_match, list_matches
+from soccer_bot.repo import Match, add_match, list_matches
 from soccer_bot.scoring import table
 
 
@@ -24,7 +24,8 @@ def main() -> None:
         ("Team B", "Team C", 0, 3),
     ]
     for home, away, h_score, a_score in matches:
-        add_match(db, (home, away, h_score, a_score))
+        match = Match(home_team=home, away_team=away, home_score=h_score, away_score=a_score)
+        add_match(db, match)
 
     # List and display matches
     all_matches = list_matches(db)
