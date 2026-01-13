@@ -454,6 +454,41 @@ TEMPLATE = """
                 </div>
             </div>
         </div>
+        <div class="row">
+            <div class="col-12">
+                <div class="card mb-4">
+                    <div class="card-header bg-dark text-white">
+                        <h5 class="mb-0">Best Pick (Weighted)</h5>
+                    </div>
+                    <div class="card-body">
+                        {% if best_pick %}
+                            <p class="text-center mb-2">
+                                <strong>{{ best_pick.home_team }} vs {{ best_pick.away_team }}</strong>
+                            </p>
+                            <table class="table table-striped text-center">
+                                <thead>
+                                    <tr>
+                                        <th>Outcome</th>
+                                        <th>Odds</th>
+                                        <th>Score</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td>{{ best_pick.outcome }}</td>
+                                        <td><strong>{{ "%.2f"|format(best_pick.odds) }}</strong></td>
+                                        <td>{{ "%.2f"|format(best_pick.score) }}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            <p class="text-muted text-center">Odds pool: {{ odds_count }} matches</p>
+                        {% else %}
+                            <p class="text-muted text-center">No best pick available.</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <div class="row">
             <div class="col-12">
@@ -626,19 +661,27 @@ def dashboard():
     odds_data = None
     target_matches = []
     rss_items: list[dict] = []
+    odds_count = 0
+    best_pick = None
     try:
         if tips_requested:
             data = _fetch_odds_matches(config.odds_api_key)
         else:
             data = _fetch_odds_matches(config.odds_api_key, keys=["soccer_epl"])
         if data:
+            odds_count = len(data)
             rss_items = _fetch_rss_items()
             scored_candidates = []
             for match in data:
                 scored = _score_match(match, target_odds, rss_items, db)
                 if scored:
                     scored_candidates.append((scored["score"], match))
-            match = max(scored_candidates, key=lambda item: item[0])[1] if scored_candidates else data[0]
+            if scored_candidates:
+                best_match = max(scored_candidates, key=lambda item: item[0])[1]
+                best_pick = _score_match(best_match, target_odds, rss_items, db)
+                match = best_match
+            else:
+                match = data[0]
             home_team = match.get("home_team", "")
             away_team = match.get("away_team", "")
             outcomes = _extract_h2h_outcomes(match)
@@ -708,6 +751,8 @@ def dashboard():
                                   football_configured=bool(config.football_data_token),
                                   competitions=competitions,
                                   odds=odds_data,
+                                  best_pick=best_pick,
+                                  odds_count=odds_count,
                                   tips_requested=tips_requested,
                                   target_matches=target_matches,
                                   matches=matches,
