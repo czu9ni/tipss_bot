@@ -774,5 +774,857 @@
   "AVS": {
     "latitude": 39.6945,
     "longitude": -8.13057
+  },
+  "2 de Mayo": {
+    "latitude": 16.03222,
+    "longitude": -96.51778
+  },
+  "AEL": {
+    "latitude": 43.64801,
+    "longitude": -93.36827
+  },
+  "Aberdeen": {
+    "latitude": 57.14369,
+    "longitude": -2.09814
+  },
+  "Ajax": {
+    "latitude": 43.85012,
+    "longitude": -79.03288
+  },
+  "Alav\u00e9s": {
+    "latitude": 58.63333,
+    "longitude": 26.33333
+  },
+  "Albacete": {
+    "latitude": 38.99424,
+    "longitude": -1.85643
+  },
+  "Algeria": {
+    "latitude": 28.0,
+    "longitude": 3.0
+  },
+  "Almer\u00eda": {
+    "latitude": 36.83814,
+    "longitude": -2.45974
+  },
+  "Alverca": {
+    "latitude": -15.43889,
+    "longitude": 36.89
+  },
+  "Amiens": {
+    "latitude": 49.9,
+    "longitude": 2.3
+  },
+  "Am\u00e9rica": {
+    "latitude": 51.43667,
+    "longitude": 5.97917
+  },
+  "Anderlecht": {
+    "latitude": 50.83619,
+    "longitude": 4.31454
+  },
+  "Angers": {
+    "latitude": 47.47156,
+    "longitude": -0.55202
+  },
+  "Argentina": {
+    "latitude": -34.0,
+    "longitude": -64.0
+  },
+  "Arouca": {
+    "latitude": 40.93057,
+    "longitude": -8.24488
+  },
+  "Arsenal": {
+    "latitude": -20.10556,
+    "longitude": 57.53528
+  },
+  "Aston Villa": {
+    "latitude": 28.058,
+    "longitude": -82.634
+  },
+  "Atlas": {
+    "latitude": 42.93781,
+    "longitude": -83.53439
+  },
+  "Augsburg": {
+    "latitude": 48.37154,
+    "longitude": 10.89851
+  },
+  "Australia": {
+    "latitude": -25.0,
+    "longitude": 135.0
+  },
+  "Auxerre": {
+    "latitude": 47.7996,
+    "longitude": 3.57033
+  },
+  "Avellino": {
+    "latitude": 40.91494,
+    "longitude": 14.79103
+  },
+  "Bahia": {
+    "latitude": -7.35,
+    "longitude": 143.68333
+  },
+  "Banfield": {
+    "latitude": -34.74563,
+    "longitude": -58.39365
+  },
+  "Barcelona": {
+    "latitude": 41.38879,
+    "longitude": 2.15899
+  },
+  "Bari": {
+    "latitude": 41.12066,
+    "longitude": 16.86982
+  },
+  "Barnet": {
+    "latitude": 51.65,
+    "longitude": -0.2
+  },
+  "Barnsley": {
+    "latitude": 53.55,
+    "longitude": -1.48333
+  },
+  "Barrow": {
+    "latitude": 71.29058,
+    "longitude": -156.78873
+  },
+  "Basaksehir": {
+    "latitude": 41.09307,
+    "longitude": 28.80203
+  },
+  "Benfica": {
+    "latitude": 38.75087,
+    "longitude": -9.20282
+  },
+  "Blackpool": {
+    "latitude": 53.81667,
+    "longitude": -3.05
+  },
+  "Blooming": {
+    "latitude": 45.48734,
+    "longitude": -123.05122
+  },
+  "Bologna": {
+    "latitude": 44.49381,
+    "longitude": 11.33875
+  },
+  "Botafogo": {
+    "latitude": -21.38333,
+    "longitude": -43.28333
+  },
+  "Boulogne": {
+    "latitude": 48.83545,
+    "longitude": 2.24128
+  },
+  "Bournemouth": {
+    "latitude": 50.72048,
+    "longitude": -1.8795
+  },
+  "Bradford City": {
+    "latitude": 41.96173,
+    "longitude": -78.72309
+  },
+  "Braga": {
+    "latitude": 41.55032,
+    "longitude": -8.42005
+  },
+  "Brazil": {
+    "latitude": -10.0,
+    "longitude": -55.0
+  },
+  "Brentford": {
+    "latitude": 45.16025,
+    "longitude": -98.32287
+  },
+  "Brest": {
+    "latitude": 52.09755,
+    "longitude": 23.68775
+  },
+  "Bristol City": {
+    "latitude": 38.07996,
+    "longitude": -114.61944
+  },
+  "Burnley": {
+    "latitude": 53.8,
+    "longitude": -2.23333
+  },
+  "Cagliari": {
+    "latitude": 39.23054,
+    "longitude": 9.11917
+  },
+  "Cape Verde": {
+    "latitude": 14.7221,
+    "longitude": -17.50449
+  },
+  "Casa Pia": {
+    "latitude": 38.98333,
+    "longitude": 16.7
+  },
+  "Celtic": {
+    "latitude": 53.45018,
+    "longitude": -109.28478
+  },
+  "Charleroi": {
+    "latitude": 50.41136,
+    "longitude": 4.44448
+  },
+  "Chelsea": {
+    "latitude": 43.98979,
+    "longitude": -72.4476
+  },
+  "Cheltenham Town": {
+    "latitude": 40.0535,
+    "longitude": -75.1134
+  },
+  "Clermont": {
+    "latitude": 49.37897,
+    "longitude": 2.41258
+  },
+  "Colombia": {
+    "latitude": 4.0,
+    "longitude": -73.25
+  },
+  "Como": {
+    "latitude": 45.80819,
+    "longitude": 9.0832
+  },
+  "Cruz Azul": {
+    "latitude": -5.07888,
+    "longitude": -79.8382
+  },
+  "Cruzeiro": {
+    "latitude": -22.57316,
+    "longitude": -44.97108
+  },
+  "Crystal Palace": {
+    "latitude": 51.41934,
+    "longitude": -0.07854
+  },
+  "Cura\u00e7ao": {
+    "latitude": 12.16667,
+    "longitude": -68.96667
+  },
+  "C\u00f3rdoba": {
+    "latitude": -31.40648,
+    "longitude": -64.18853
+  },
+  "Dender": {
+    "latitude": 11.28333,
+    "longitude": 38.76667
+  },
+  "Dundalk": {
+    "latitude": 39.25066,
+    "longitude": -76.52052
+  },
+  "Ecuador": {
+    "latitude": -1.25,
+    "longitude": -78.25
+  },
+  "Egypt": {
+    "latitude": 27.0,
+    "longitude": 30.0
+  },
+  "Elversberg": {
+    "latitude": 49.31437,
+    "longitude": 7.12844
+  },
+  "Empoli": {
+    "latitude": 43.71795,
+    "longitude": 10.94758
+  },
+  "Estoril": {
+    "latitude": 38.70571,
+    "longitude": -9.39773
+  },
+  "Estudiantes": {
+    "latitude": 9.96695,
+    "longitude": -84.06136
+  },
+  "Everton": {
+    "latitude": 52.14581,
+    "longitude": -0.24616
+  },
+  "Excelsior": {
+    "latitude": 44.9033,
+    "longitude": -93.56635
+  },
+  "Exeter City": {
+    "latitude": 36.29634,
+    "longitude": -119.13427
+  },
+  "Famalic\u00e3o": {
+    "latitude": 39.53642,
+    "longitude": -9.08308
+  },
+  "Fiorentina": {
+    "latitude": 42.96392,
+    "longitude": 10.53556
+  },
+  "Flamengo": {
+    "latitude": -5.98333,
+    "longitude": -39.63333
+  },
+  "Frosinone": {
+    "latitude": 41.63976,
+    "longitude": 13.34109
+  },
+  "Fulham": {
+    "latitude": 51.48026,
+    "longitude": -0.1993
+  },
+  "Genk": {
+    "latitude": 50.965,
+    "longitude": 5.50082
+  },
+  "Genoa": {
+    "latitude": 44.40478,
+    "longitude": 8.94439
+  },
+  "Gent": {
+    "latitude": 51.05,
+    "longitude": 3.71667
+  },
+  "Getafe": {
+    "latitude": 40.30571,
+    "longitude": -3.73295
+  },
+  "Ghana": {
+    "latitude": 8.1,
+    "longitude": -1.2
+  },
+  "Gillingham": {
+    "latitude": 51.38914,
+    "longitude": 0.54863
+  },
+  "Girona": {
+    "latitude": 41.98311,
+    "longitude": 2.82493
+  },
+  "Goztepe": {
+    "latitude": 38.98145,
+    "longitude": 42.30148
+  },
+  "Grenoble": {
+    "latitude": 45.17869,
+    "longitude": 5.71479
+  },
+  "Groningen": {
+    "latitude": 53.21917,
+    "longitude": 6.56667
+  },
+  "Gr\u00eamio": {
+    "latitude": -12.55649,
+    "longitude": 16.33305
+  },
+  "Guabir\u00e1": {
+    "latitude": -17.3118,
+    "longitude": -63.26268
+  },
+  "Guadalajara": {
+    "latitude": 20.66682,
+    "longitude": -103.39182
+  },
+  "Guingamp": {
+    "latitude": 48.56259,
+    "longitude": -3.15289
+  },
+  "Haiti": {
+    "latitude": 19.07582,
+    "longitude": -72.29616
+  },
+  "Hartberg": {
+    "latitude": 47.28333,
+    "longitude": 15.96667
+  },
+  "Hearts": {
+    "latitude": 35.91766,
+    "longitude": -76.25215
+  },
+  "Heerenveen": {
+    "latitude": 52.95929,
+    "longitude": 5.91854
+  },
+  "Hibernian": {
+    "latitude": 32.8274,
+    "longitude": -79.94953
+  },
+  "Independiente": {
+    "latitude": -17.14358,
+    "longitude": -64.67194
+  },
+  "Internacional": {
+    "latitude": 32.47763,
+    "longitude": -117.00868
+  },
+  "Iran": {
+    "latitude": 32.0,
+    "longitude": 53.0
+  },
+  "Ireland": {
+    "latitude": 53.0,
+    "longitude": -8.0
+  },
+  "Ivory Coast": {
+    "latitude": 8.0,
+    "longitude": -5.5
+  },
+  "Japan": {
+    "latitude": 35.68536,
+    "longitude": 139.7531
+  },
+  "Jordan": {
+    "latitude": 31.0,
+    "longitude": 36.0
+  },
+  "Kilmarnock": {
+    "latitude": 55.61171,
+    "longitude": -4.49581
+  },
+  "Kosovo": {
+    "latitude": 42.58333,
+    "longitude": 20.91667
+  },
+  "LASK": {
+    "latitude": 51.55,
+    "longitude": 19.2
+  },
+  "Lanus": {
+    "latitude": -34.70757,
+    "longitude": -58.39132
+  },
+  "Las Palmas": {
+    "latitude": 8.13623,
+    "longitude": -81.4541
+  },
+  "Le Havre": {
+    "latitude": 49.49346,
+    "longitude": 0.10785
+  },
+  "Lecce": {
+    "latitude": 40.35481,
+    "longitude": 18.17244
+  },
+  "Legan\u00e9s": {
+    "latitude": 40.32718,
+    "longitude": -3.7635
+  },
+  "Leuven": {
+    "latitude": 50.87959,
+    "longitude": 4.70093
+  },
+  "Levante": {
+    "latitude": 45.34417,
+    "longitude": 11.80713
+  },
+  "Le\u00f3n": {
+    "latitude": 21.12908,
+    "longitude": -101.67374
+  },
+  "Lille": {
+    "latitude": 50.63297,
+    "longitude": 3.05858
+  },
+  "Lincoln City": {
+    "latitude": 44.95816,
+    "longitude": -124.01789
+  },
+  "Liverpool": {
+    "latitude": 53.41058,
+    "longitude": -2.97794
+  },
+  "Livingston": {
+    "latitude": 45.66244,
+    "longitude": -110.56104
+  },
+  "Lorient": {
+    "latitude": 47.74817,
+    "longitude": -3.37177
+  },
+  "Luton": {
+    "latitude": 51.87967,
+    "longitude": -0.41748
+  },
+  "Lyon": {
+    "latitude": 45.74846,
+    "longitude": 4.84671
+  },
+  "Macar\u00e1": {
+    "latitude": -4.38184,
+    "longitude": -79.94521
+  },
+  "Mallorca": {
+    "latitude": 39.6078,
+    "longitude": 3.01197
+  },
+  "Manchester City": {
+    "latitude": 53.48097,
+    "longitude": -2.24555
+  },
+  "Mantova": {
+    "latitude": 45.16031,
+    "longitude": 10.79784
+  },
+  "Marseille": {
+    "latitude": 43.29695,
+    "longitude": 5.38107
+  },
+  "Melbourne City": {
+    "latitude": -37.81501,
+    "longitude": 144.96657
+  },
+  "Metz": {
+    "latitude": 49.11911,
+    "longitude": 6.17269
+  },
+  "Mexico": {
+    "latitude": 23.0,
+    "longitude": -102.0
+  },
+  "Middlesbrough": {
+    "latitude": 54.57623,
+    "longitude": -1.23483
+  },
+  "Millwall": {
+    "latitude": 51.49058,
+    "longitude": -0.02375
+  },
+  "Mirassol": {
+    "latitude": -9.46667,
+    "longitude": -36.61667
+  },
+  "Modena": {
+    "latitude": 44.64783,
+    "longitude": 10.92539
+  },
+  "Monterrey": {
+    "latitude": 25.67507,
+    "longitude": -100.31847
+  },
+  "Montpellier": {
+    "latitude": 43.61093,
+    "longitude": 3.87635
+  },
+  "Monza": {
+    "latitude": 45.58005,
+    "longitude": 9.27246
+  },
+  "Morocco": {
+    "latitude": 28.5,
+    "longitude": -10.0
+  },
+  "Motherwell": {
+    "latitude": 55.78924,
+    "longitude": -3.99187
+  },
+  "M\u00e1laga": {
+    "latitude": 36.72016,
+    "longitude": -4.42034
+  },
+  "Nacional": {
+    "latitude": 17.29028,
+    "longitude": -98.12067
+  },
+  "Nancy": {
+    "latitude": 48.68439,
+    "longitude": 6.18496
+  },
+  "Nantes": {
+    "latitude": 47.21725,
+    "longitude": -1.55336
+  },
+  "Napoli": {
+    "latitude": 40.87618,
+    "longitude": 14.5195
+  },
+  "Necaxa": {
+    "latitude": 20.21271,
+    "longitude": -98.01188
+  },
+  "New Zealand": {
+    "latitude": -42.0,
+    "longitude": 174.0
+  },
+  "Nice": {
+    "latitude": 43.70313,
+    "longitude": 7.26608
+  },
+  "Nigeria": {
+    "latitude": 10.0,
+    "longitude": 8.0
+  },
+  "North Macedonia": {
+    "latitude": 41.66667,
+    "longitude": 21.75
+  },
+  "Nottingham Forest": {
+    "latitude": 37.33542,
+    "longitude": -79.25808
+  },
+  "Oviedo": {
+    "latitude": 43.36029,
+    "longitude": -5.84476
+  },
+  "PAOK": {
+    "latitude": -6.28611,
+    "longitude": 106.40306
+  },
+  "Pachuca": {
+    "latitude": 20.11697,
+    "longitude": -98.73329
+  },
+  "Padova": {
+    "latitude": 45.40797,
+    "longitude": 11.88586
+  },
+  "Palermo": {
+    "latitude": 38.1166,
+    "longitude": 13.3636
+  },
+  "Palestino": {
+    "latitude": -2.22775,
+    "longitude": -79.91026
+  },
+  "Palmeiras": {
+    "latitude": -21.82694,
+    "longitude": -47.24861
+  },
+  "Panama": {
+    "latitude": 8.9936,
+    "longitude": -79.51973
+  },
+  "Paraguay": {
+    "latitude": -23.33333,
+    "longitude": -58.0
+  },
+  "Parma": {
+    "latitude": 44.79935,
+    "longitude": 10.32618
+  },
+  "Pescara": {
+    "latitude": 42.4584,
+    "longitude": 14.20283
+  },
+  "Pisa": {
+    "latitude": 43.70853,
+    "longitude": 10.4036
+  },
+  "Porto": {
+    "latitude": 41.14961,
+    "longitude": -8.61099
+  },
+  "Portsmouth": {
+    "latitude": 50.79899,
+    "longitude": -1.09125
+  },
+  "Puebla": {
+    "latitude": 19.03793,
+    "longitude": -98.20346
+  },
+  "Puerto Cabello": {
+    "latitude": 10.47306,
+    "longitude": -68.0125
+  },
+  "Pumas": {
+    "latitude": -13.0799,
+    "longitude": -75.64668
+  },
+  "Qatar": {
+    "latitude": 25.5,
+    "longitude": 51.25
+  },
+  "Quer\u00e9taro": {
+    "latitude": 15.83752,
+    "longitude": -92.75774
+  },
+  "Rangers": {
+    "latitude": 46.86001,
+    "longitude": 12.94923
+  },
+  "Reading": {
+    "latitude": 51.45625,
+    "longitude": -0.97113
+  },
+  "Red Star": {
+    "latitude": 33.71261,
+    "longitude": -87.12139
+  },
+  "Remo": {
+    "latitude": 37.81597,
+    "longitude": -76.35272
+  },
+  "Rennes": {
+    "latitude": 48.11198,
+    "longitude": -1.67429
+  },
+  "Ried": {
+    "latitude": 53.22258,
+    "longitude": 5.58929
+  },
+  "Salzburg": {
+    "latitude": 47.79941,
+    "longitude": 13.04399
+  },
+  "San Lorenzo": {
+    "latitude": -25.33968,
+    "longitude": -57.50879
+  },
+  "Santa Clara": {
+    "latitude": 22.40694,
+    "longitude": -79.96472
+  },
+  "Santos": {
+    "latitude": -23.96083,
+    "longitude": -46.33361
+  },
+  "Sao Paulo": {
+    "latitude": -23.5475,
+    "longitude": -46.63611
+  },
+  "Sassuolo": {
+    "latitude": 44.5432,
+    "longitude": 10.7848
+  },
+  "Saudi Arabia": {
+    "latitude": 25.0,
+    "longitude": 45.0
+  },
+  "Schweinfurt": {
+    "latitude": 50.04937,
+    "longitude": 10.22175
+  },
+  "Senegal": {
+    "latitude": 14.5,
+    "longitude": -14.25
+  },
+  "Servette": {
+    "latitude": 46.21212,
+    "longitude": 6.13097
+  },
+  "Sevilla": {
+    "latitude": 37.38283,
+    "longitude": -5.97317
+  },
+  "South Africa": {
+    "latitude": -29.0,
+    "longitude": 24.0
+  },
+  "Southampton": {
+    "latitude": 50.90395,
+    "longitude": -1.40428
+  },
+  "Spezia": {
+    "latitude": 44.103,
+    "longitude": 9.82375
+  },
+  "Stevenage": {
+    "latitude": 51.90224,
+    "longitude": -0.20256
+  },
+  "Strasbourg": {
+    "latitude": 48.58392,
+    "longitude": 7.74553
+  },
+  "Sunderland": {
+    "latitude": 54.90465,
+    "longitude": -1.38222
+  },
+  "Sweden": {
+    "latitude": 62.0,
+    "longitude": 15.0
+  },
+  "Talleres": {
+    "latitude": -45.81667,
+    "longitude": -67.45
+  },
+  "Tigres": {
+    "latitude": 16.13333,
+    "longitude": -95.56667
+  },
+  "Tijuana": {
+    "latitude": 32.5027,
+    "longitude": -117.00371
+  },
+  "Toluca": {
+    "latitude": 19.28786,
+    "longitude": -99.65324
+  },
+  "Tondela": {
+    "latitude": 40.51682,
+    "longitude": -8.08087
+  },
+  "Torino": {
+    "latitude": 45.07049,
+    "longitude": 7.68682
+  },
+  "Toulouse": {
+    "latitude": 43.60426,
+    "longitude": 1.44367
+  },
+  "Troyes": {
+    "latitude": 48.30073,
+    "longitude": 4.08524
+  },
+  "USA": {
+    "latitude": 38.67351,
+    "longitude": 29.4058
+  },
+  "Union Santa Fe": {
+    "latitude": -12.46518,
+    "longitude": -73.85056
+  },
+  "Uruguay": {
+    "latitude": -33.0,
+    "longitude": -56.0
+  },
+  "Uzbekistan": {
+    "latitude": 41.66667,
+    "longitude": 63.83333
+  },
+  "Valencia": {
+    "latitude": 39.47391,
+    "longitude": -0.37966
+  },
+  "Vasco da Gama": {
+    "latitude": 15.39585,
+    "longitude": 73.81568
+  },
+  "Venezia": {
+    "latitude": 44.42329,
+    "longitude": 11.17365
+  },
+  "Villarreal": {
+    "latitude": 38.72572,
+    "longitude": -7.21533
+  },
+  "Vitoria": {
+    "latitude": -20.31944,
+    "longitude": -40.33778
+  },
+  "Wales": {
+    "latitude": 53.34061,
+    "longitude": -1.28162
+  },
+  "Walsall": {
+    "latitude": 52.58528,
+    "longitude": -1.98396
+  },
+  "Watford": {
+    "latitude": 51.65531,
+    "longitude": -0.39602
+  },
+  "Westerlo": {
+    "latitude": 51.09049,
+    "longitude": 4.91544
+  },
+  "Wimbledon": {
+    "latitude": 47.16971,
+    "longitude": -98.45982
+  },
+  "Zaragoza": {
+    "latitude": 41.65606,
+    "longitude": -0.87734
   }
 }
