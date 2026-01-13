@@ -98,6 +98,7 @@ TEMPLATE = """
                         <div class="alert alert-success text-center">
                             <h5 class="ai-tip">🤖 AI Recommendation: {{ odds.tip }}</h5>
                         </div>
+                        <canvas id="oddsChart" width="400" height="200"></canvas>
                         {% else %}
                         <p class="text-muted text-center">No live odds available at the moment.</p>
                         {% endif %}
@@ -165,6 +166,35 @@ TEMPLATE = """
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            {% if odds %}
+            const ctx = document.getElementById('oddsChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['Home Win', 'Draw', 'Away Win'],
+                    datasets: [{
+                        label: 'Probability',
+                        data: [{{ odds.home_prob }}, {{ odds.draw_prob }}, {{ odds.away_prob }}],
+                        backgroundColor: ['#28a745', '#ffc107', '#dc3545'],
+                        borderColor: ['#28a745', '#ffc107', '#dc3545'],
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 1
+                        }
+                    }
+                }
+            });
+            {% endif %}
+        });
+    </script>
 </body>
 </html>
 """
@@ -255,6 +285,9 @@ def dashboard():
                     'home_odds': home_odds,
                     'draw_odds': draw_odds,
                     'away_odds': away_odds,
+                    'home_prob': home_prob,
+                    'draw_prob': draw_prob,
+                    'away_prob': away_prob,
                     'tip': tip
                 }
     except:
