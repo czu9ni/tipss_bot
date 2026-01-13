@@ -3,7 +3,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from soccer_bot.config import load_config
 from soccer_bot.db import connect
-from soccer_bot.repo import Match, add_match, list_matches
+from soccer_bot.repo import Match, add_match, list_matches, get_team_stats
 from soccer_bot.scoring import table
 import requests
 
@@ -230,7 +230,11 @@ def dashboard():
                 home_odds = next(o['price'] for o in odds if o['name'] == home_team)
                 away_odds = next(o['price'] for o in odds if o['name'] == away_team)
                 draw_odds = next(o['price'] for o in odds if o['name'] == 'Draw')
-                # Enhanced AI tip with weather and news factors
+                # Enhanced AI tip with stats, weather and news factors
+                home_stats = get_team_stats(db, home_team)
+                away_stats = get_team_stats(db, away_team)
+                stats_factor = (home_stats['win_rate'] - away_stats['win_rate']) * 0.2  # Favor better win rate
+
                 home_prob = 1 / home_odds
                 away_prob = 1 / away_odds
                 draw_prob = 1 / draw_odds
@@ -271,16 +275,16 @@ def dashboard():
                     pass
 
                 # Final scores with factors
-                home_final = home_score + weather_factor + news_factor
-                away_final = away_score + weather_factor + news_factor
+                home_final = home_score + stats_factor + weather_factor + news_factor
+                away_final = away_score + stats_factor + weather_factor + news_factor
                 draw_final = draw_score
 
                 if home_final > away_final and home_final > draw_final:
-                    tip = f"Home win (AI: prob {home_prob:.2f}, weather {weather_factor:.2f}, news {news_factor:.2f})"
+                    tip = f"Home win (AI: prob {home_prob:.2f}, stats {stats_factor:.2f}, weather {weather_factor:.2f}, news {news_factor:.2f})"
                 elif away_final > home_final and away_final > draw_final:
-                    tip = f"Away win (AI: prob {away_prob:.2f}, weather {weather_factor:.2f}, news {news_factor:.2f})"
+                    tip = f"Away win (AI: prob {away_prob:.2f}, stats {stats_factor:.2f}, weather {weather_factor:.2f}, news {news_factor:.2f})"
                 else:
-                    tip = f"Draw (AI: prob {draw_prob:.2f}, weather {weather_factor:.2f}, news {news_factor:.2f})"
+                    tip = f"Draw (AI: prob {draw_prob:.2f}, stats {stats_factor:.2f}, weather {weather_factor:.2f}, news {news_factor:.2f})"
                 odds_data = {
                     'home_team': home_team,
                     'away_team': away_team,

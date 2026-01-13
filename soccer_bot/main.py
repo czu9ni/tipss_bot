@@ -74,15 +74,20 @@ def main() -> None:
     db = connect(config.db_url)
     db.ensure_schema()
 
-    # Add sample matches
-    matches = [
-        ("Team A", "Team B", 2, 1),
-        ("Team A", "Team C", 1, 1),
-        ("Team B", "Team C", 0, 3),
+    # Add sample matches with dates
+    sample_matches = [
+        Match("Team A", "Team B", 2, 1, "2023-01-01"),
+        Match("Team A", "Team C", 1, 1, "2023-01-02"),
+        Match("Team B", "Team C", 0, 3, "2023-01-03"),
+        Match("Team A", "Team B", 3, 0, "2023-01-04"),
+        Match("Team C", "Team A", 2, 2, "2023-01-05"),
+        Match("Team B", "Team C", 1, 1, "2023-01-06"),
     ]
-    for home, away, h_score, a_score in matches:
-        match = Match(home_team=home, away_team=away, home_score=h_score, away_score=a_score)
-        add_match(db, match)
+    for match in sample_matches:
+        try:
+            add_match(db, match)
+        except:
+            pass  # Already exists
 
     # List and display matches
     all_matches = list_matches(db)
