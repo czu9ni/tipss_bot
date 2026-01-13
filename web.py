@@ -104,7 +104,20 @@ def dashboard():
                 home_odds = next(o['price'] for o in odds if o['name'] == home_team)
                 away_odds = next(o['price'] for o in odds if o['name'] == away_team)
                 draw_odds = next(o['price'] for o in odds if o['name'] == 'Draw')
-                tip = "Home win" if home_odds < 2.0 else "Draw or Away"
+                # AI-weighted tip calculation
+                home_prob = 1 / home_odds
+                away_prob = 1 / away_odds
+                draw_prob = 1 / draw_odds
+                # Weights: probability 40%, favorite bonus 10%, draw 20%
+                home_score = home_prob * 0.4 + (1 if home_odds < 2.5 else 0) * 0.1
+                away_score = away_prob * 0.4 + (1 if away_odds < 2.5 else 0) * 0.1
+                draw_score = draw_prob * 0.2
+                if home_score > away_score and home_score > draw_score:
+                    tip = "Home win (AI-weighted analysis)"
+                elif away_score > home_score and away_score > draw_score:
+                    tip = "Away win (AI-weighted analysis)"
+                else:
+                    tip = "Draw (AI-weighted analysis)"
                 odds_data = {
                     'home_team': home_team,
                     'away_team': away_team,
