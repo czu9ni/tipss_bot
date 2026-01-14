@@ -26,6 +26,41 @@ RSS_FEEDS = [
 RSS_CACHE_TTL_SECONDS = 600
 _RSS_CACHE: dict[str, object] = {"fetched_at": 0.0, "items": []}
 _GEOCODE_CACHE: dict[str, dict] = {}
+_SERVER_TIME_CACHE = {"ts": 0.0, "value": None}
+
+
+def _server_time_utc() -> datetime | None:
+    if _SERVER_TIME_CACHE["value"] and (time.time() - _SERVER_TIME_CACHE["ts"]) < 3600:
+        return _SERVER_TIME_CACHE["value"]
+    key = config.api_football_key
+    if not key:
+        return None
+    try:
+        response = requests.get(
+            "https://v3.football.api-sports.io/status",
+            headers={"x-apisports-key": key},
+            timeout=10,
+        )
+        if response.status_code != 200:
+            return None
+        data = response.json()
+        resp = data.get("response", {})
+        raw_time = resp.get("time") or resp.get("current") or resp.get("timestamp")
+        if isinstance(raw_time, (int, float)):
+            value = datetime.fromtimestamp(raw_time, tz=timezone.utc)
+        elif isinstance(raw_time, str):
+            value = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+        else:
+            return None
+        _SERVER_TIME_CACHE["ts"] = time.time()
+        _SERVER_TIME_CACHE["value"] = value
+        return value
+    except Exception:
+        return None
+
+
 _WEATHER_CACHE: dict[str, dict] = {}
 _WEIGHTS_CACHE: dict[str, float] | None = None
 _RIVALRIES_CACHE: list[tuple[str, str]] | None = None
@@ -1049,6 +1084,13 @@ def _fixture_window(hours: int) -> tuple[datetime, str, str]:
             base = datetime.now(timezone.utc)
     else:
         base = datetime.now(timezone.utc)
+
+    # If system clock looks wrong, try API-Football server time
+    if base.year < 2020 or base.year > 2025:
+        server_time = _server_time_utc()
+        if server_time:
+            base = server_time
+
     days_ahead = max(1, int(math.ceil(hours / 24)))
     date_from = base.date().isoformat()
     date_to = (base + timedelta(days=days_ahead)).date().isoformat()
