@@ -1019,6 +1019,61 @@ def _fetch_recent_matches_fd(token: str, comp_code: str, limit: int = 6) -> list
 
 
 
+
+
+def _fetch_upcoming_fixtures_fd_all(token: str, hours: int = 24, limit: int = 40) -> list[dict]:
+    if not token:
+        return []
+    try:
+        now = datetime.now(timezone.utc)
+        date_from = now.date().isoformat()
+        days_ahead = max(1, int(math.ceil(hours / 24)))
+        date_to = (now + timedelta(days=days_ahead)).date().isoformat()
+        response = requests.get(
+            "https://api.football-data.org/v4/matches",
+            headers={"X-Auth-Token": token},
+            params={"status": "SCHEDULED", "dateFrom": date_from, "dateTo": date_to},
+            timeout=12,
+        )
+        if response.status_code != 200:
+            return []
+        fixtures = []
+        for match in response.json().get("matches", []):
+            utc_date = match.get("utcDate")
+            if not utc_date:
+                continue
+            try:
+                commence_dt = datetime.fromisoformat(utc_date.replace("Z", "+00:00"))
+            except Exception:
+                continue
+            delta = commence_dt - now
+            if delta.total_seconds() < 0 or delta.total_seconds() > hours * 3600:
+                continue
+            home = match.get("homeTeam", {})
+            away = match.get("awayTeam", {})
+            home_name = home.get("name")
+            away_name = away.get("name")
+            comp = match.get("competition", {})
+            comp_code = comp.get("code") or comp.get("id") or ""
+            if not home_name or not away_name:
+                continue
+            fixtures.append(
+                {
+                    "id": match.get("id"),
+                    "sport_key": comp_code,
+                    "comp_code": comp_code,
+                    "commence_time": utc_date,
+                    "home_team": home_name,
+                    "away_team": away_name,
+                    "home_id": home.get("id"),
+                    "away_id": away.get("id"),
+                }
+            )
+        return fixtures[:limit]
+    except Exception:
+        return []
+
+
 def _fetch_upcoming_fixtures_fd(token: str, comp_code: str, hours: int = 24, limit: int = 10) -> list[dict]:
     if not token or not comp_code:
         return []
@@ -1850,6 +1905,8 @@ def dashboard():
                         continue
                     standings_by_comp[code] = _fetch_standings_fd(config.football_data_token, code)
                     fixtures.extend(_fetch_upcoming_fixtures_fd(config.football_data_token, code, window_hours))
+                if not fixtures:
+                    fixtures = _fetch_upcoming_fixtures_fd_all(config.football_data_token, window_hours)
                 picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                 if not picks:
                     fallback_hours = 168
@@ -1859,11 +1916,13 @@ def dashboard():
                         if not code:
                             continue
                         fixtures.extend(_fetch_upcoming_fixtures_fd(config.football_data_token, code, fallback_hours))
+                    if not fixtures:
+                        fixtures = _fetch_upcoming_fixtures_fd_all(config.football_data_token, fallback_hours)
                     picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                     if picks:
                         odds_error = "Odds API kulcs hianyzik (odds nelkuli ajanlas, 7 napos ablak)"
-                    if not picks:
-                        odds_error = "Nincs elerheto meccs 7 napos ablakban"
+                if not picks:
+                    odds_error = "Nincs elerheto meccs 7 napos ablakban"
                 odds_count = len(picks)
                 best_pick = _enrich_pick(picks[0]) if picks else None
                 best_combo = None
@@ -1896,6 +1955,8 @@ def dashboard():
                             continue
                         standings_by_comp[code] = _fetch_standings_fd(config.football_data_token, code)
                         fixtures.extend(_fetch_upcoming_fixtures_fd(config.football_data_token, code, window_hours))
+                    if not fixtures:
+                        fixtures = _fetch_upcoming_fixtures_fd_all(config.football_data_token, window_hours)
                     picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                     if not picks:
                         fallback_hours = 168
@@ -1905,6 +1966,8 @@ def dashboard():
                             if not code:
                                 continue
                             fixtures.extend(_fetch_upcoming_fixtures_fd(config.football_data_token, code, fallback_hours))
+                        if not fixtures:
+                            fixtures = _fetch_upcoming_fixtures_fd_all(config.football_data_token, fallback_hours)
                         picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                         if picks:
                             odds_error = "Odds API adat nem elerheto (7 napos ablak)"
@@ -1927,6 +1990,7 @@ def dashboard():
                         },
                     )
                 if use_odds and data:
+
                     for match in data:
                         home_team = match.get("home_team", "")
                         away_team = match.get("away_team", "")
