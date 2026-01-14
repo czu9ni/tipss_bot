@@ -30,6 +30,7 @@ _WEIGHTS_CACHE: dict[str, float] | None = None
 _RIVALRIES_CACHE: list[tuple[str, str]] | None = None
 _TEAM_LOCATION_OVERRIDES: dict[str, dict] | None = None
 _SPORTS_CACHE: dict[str, object] = {"fetched_at": 0.0, "keys": []}
+_ODDS_LAST_ERROR: str | None = None
 SPORTS_CACHE_TTL_SECONDS = 3600
 _ELO_CACHE: dict[str, float] = {}
 _TEAM_ID_MAP: dict[str, int] | None = None
@@ -1381,7 +1382,9 @@ def _fetch_sports_keys(api_key: str) -> list[str]:
     return keys
 
 
-def _fetch_odds_matches(api_key: str, keys: list[str] | None = None) -> list[dict]:
+def _fetch_odds_matches(api_key: str, keys: list[str] | None = None) -> tuple[list[dict], str | None]:
+    global _ODDS_LAST_ERROR
+    _ODDS_LAST_ERROR = None
     matches: list[dict] = []
     keys = keys or _fetch_sports_keys(api_key)
     max_sports = int(os.environ.get("ODDS_MAX_SPORTS", "0"))
@@ -1398,6 +1401,12 @@ def _fetch_odds_matches(api_key: str, keys: list[str] | None = None) -> list[dic
             if response.status_code == 200:
                 matches.extend(response.json())
             else:
+                try:
+                    data = response.json()
+                    if data.get("error_code") == "OUT_OF_USAGE_CREDITS":
+                        _ODDS_LAST_ERROR = "Odds API kvota elfogyott"
+                except Exception:
+                    pass
                 fallback = requests.get(
                     f"https://api.the-odds-api.com/v4/sports/{key}/odds",
                     params={"apiKey": api_key, "regions": "eu", "markets": "h2h"},
@@ -1405,9 +1414,16 @@ def _fetch_odds_matches(api_key: str, keys: list[str] | None = None) -> list[dic
                 )
                 if fallback.status_code == 200:
                     matches.extend(fallback.json())
+                else:
+                    try:
+                        data = fallback.json()
+                        if data.get("error_code") == "OUT_OF_USAGE_CREDITS":
+                            _ODDS_LAST_ERROR = "Odds API kvota elfogyott"
+                    except Exception:
+                        pass
         except Exception:
             pass
-    return matches
+    return matches, _ODDS_LAST_ERROR
 
 # HTML template
 TEMPLATE = """
@@ -1458,6 +1474,9 @@ TEMPLATE = """
                     </div>
                     <div class="card-body">
                         <p><strong>Odds API:</strong> {{ "Beallitva" if odds_configured else "Hianyzik" }}</p>
+                        {% if odds_error %}
+                        <p class="text-danger"><strong>Odds API hiba:</strong> {{ odds_error }}</p>
+                        {% endif %}
                         <p><strong>Football Data:</strong> {{ "Beallitva" if football_configured else "Hianyzik" }}</p>
                         <p><strong>Idojaras:</strong> Open-Meteo (nincs kulcs)</p>
                         <p><strong>Hirek:</strong> RSS feedek (nincs kulcs)</p>
@@ -1568,7 +1587,13 @@ TEMPLATE = """
                                 </tbody>
                             </table>
                         {% else %}
-                            <p class="text-muted text-center">Nincs elerheto tipp az Odds API 24h savban.</p>
+                            <p class="text-muted text-center">
+                                {% if odds_error %}
+                                    Nincs tipp: {{ odds_error }}.
+                                {% else %}
+                                    Nincs elerheto tipp az Odds API 24h savban.
+                                {% endif %}
+                            </p>
                         {% endif %}
                     </div>
                 </div>
@@ -1632,7 +1657,13 @@ TEMPLATE = """
                             </table>
                             <p class="text-muted text-center">Odds pool: {{ odds_count }} meccs (24h, nem rangado)</p>
                         {% else %}
-                            <p class="text-muted text-center">Nincs ervenyes 2-meccses kombi 2.00 +/- 0.15 savban.</p>
+                            <p class="text-muted text-center">
+                                {% if odds_error %}
+                                    Nincs kombi: {{ odds_error }}.
+                                {% else %}
+                                    Nincs ervenyes 2-meccses kombi 2.00 +/- 0.15 savban.
+                                {% endif %}
+                            </p>
                         {% endif %}
                     </div>
                 </div>
@@ -1686,7 +1717,13 @@ TEMPLATE = """
                                 </tbody>
                             </table>
                         {% else %}
-                            <p class="text-muted text-center">Nincs meccs 2.00 koruli oddssal.</p>
+                            <p class="text-muted text-center">
+                                {% if odds_error %}
+                                    Nincs meccs: {{ odds_error }}.
+                                {% else %}
+                                    Nincs meccs 2.00 koruli oddssal.
+                                {% endif %}
+                            </p>
                         {% endif %}
                     </div>
                 </div>
@@ -1897,10 +1934,11 @@ def dashboard():
     target_matches = []
     rss_items: list[dict] = []
     odds_count = 0
+    odds_error = None
     best_pick = None
     best_combo = None
     try:
-        data = _fetch_odds_matches(config.odds_api_key)
+        data, odds_error = _fetch_odds_matches(config.odds_api_key)
         eligible = []
         if data:
             for match in data:
@@ -2011,6 +2049,7 @@ def dashboard():
                                   rss_items=rss_items,
                                   rss_sources=rss_sources,
                                   saved_picks=saved_picks,
+                                  odds_error=odds_error,
                                   active_tab=active_tab)
 
 
