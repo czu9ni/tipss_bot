@@ -1922,15 +1922,14 @@ def dashboard():
                         },
                     )
                 if use_odds and data:
-
-                for match in data:
-                    home_team = match.get("home_team", "")
-                    away_team = match.get("away_team", "")
-                    if not _within_hours(match, window_hours):
-                        continue
-                    if _is_rivalry(home_team, away_team):
-                        continue
-                    eligible.append(match)
+                    for match in data:
+                        home_team = match.get("home_team", "")
+                        away_team = match.get("away_team", "")
+                        if not _within_hours(match, window_hours):
+                            continue
+                        if _is_rivalry(home_team, away_team):
+                            continue
+                        eligible.append(match)
             if eligible:
                 odds_count = len(eligible)
                 rss_items = _fetch_rss_items()
