@@ -1,14 +1,14 @@
-from flask import Flask, render_template_string, request
+from flask import Flask, render_template_string, request, redirect, url_for
 from soccer_bot.config import load_config
 from soccer_bot.db import connect
-from soccer_bot.repo import Match, add_match, get_team_stats, list_matches
+from soccer_bot.repo import get_team_stats, list_matches
 from soccer_bot.scoring import match_points, table
 import html
 import json
 import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import math
 import requests
 
@@ -763,9 +763,12 @@ def _score_pick(
         "match_key": _match_key(match),
         "home_team": home_team,
         "away_team": away_team,
+        "sport_key": str(match.get("sport_key") or ""),
+        "commence_time": str(match.get("commence_time") or ""),
         "market_key": market_key,
         "market_label": _market_label(market_key),
         "outcome": selection_label,
+        "line": point,
         "odds": price,
         "distance": abs(price - target),
         "score": total,
@@ -835,6 +838,81 @@ def _build_picks_for_match(
     return picks
 
 
+def _primary_competition(competitions: list[dict]) -> str | None:
+    preferred = os.environ.get("PRIMARY_COMP", "PL")
+    for comp in competitions:
+        if comp.get("code") == preferred:
+            return preferred
+    if competitions:
+        return competitions[0].get("code")
+    return None
+
+
+def _fetch_recent_matches_fd(token: str, comp_code: str, limit: int = 6) -> list[dict]:
+    if not token or not comp_code:
+        return []
+    try:
+        response = requests.get(
+            f"https://api.football-data.org/v4/competitions/{comp_code}/matches",
+            headers={"X-Auth-Token": token},
+            params={"status": "FINISHED", "limit": str(limit)},
+            timeout=12,
+        )
+        if response.status_code != 200:
+            return []
+        matches = []
+        for match in response.json().get("matches", []):
+            home = match.get("homeTeam", {}).get("name")
+            away = match.get("awayTeam", {}).get("name")
+            score = match.get("score", {}).get("fullTime", {})
+            home_score = score.get("home")
+            away_score = score.get("away")
+            if home and away and home_score is not None and away_score is not None:
+                matches.append(
+                    {
+                        "home_team": home,
+                        "away_team": away,
+                        "score": f"{home_score}-{away_score}",
+                    }
+                )
+        return matches
+    except Exception:
+        return []
+
+
+def _fetch_standings_fd(token: str, comp_code: str, limit: int = 10) -> list[dict]:
+    if not token or not comp_code:
+        return []
+    try:
+        response = requests.get(
+            f"https://api.football-data.org/v4/competitions/{comp_code}/standings",
+            headers={"X-Auth-Token": token},
+            timeout=12,
+        )
+        if response.status_code != 200:
+            return []
+        data = response.json()
+        tables = data.get("standings", [])
+        total = None
+        for table_item in tables:
+            if table_item.get("type") == "TOTAL":
+                total = table_item
+                break
+        total = total or (tables[0] if tables else None)
+        if not total:
+            return []
+        rows = []
+        for row in total.get("table", [])[:limit]:
+            team = row.get("team", {}).get("name")
+            points = row.get("points")
+            position = row.get("position")
+            if team and points is not None and position is not None:
+                rows.append({"position": position, "team": team, "points": points})
+        return rows
+    except Exception:
+        return []
+
+
 def _build_form_scores(matches: list[Match], window: int = 5) -> dict[str, float]:
     recent: dict[str, list[int]] = {}
     for match in reversed(matches):
@@ -889,10 +967,32 @@ def _build_best_combo(picks: list[dict], target: float) -> dict | None:
                 "combined_odds": combined_odds,
                 "score": score,
                 "risk": _risk_label(score),
+                "forced": False,
             }
             if best is None or combo["score"] > best["score"]:
                 best = combo
-    return best
+    if best:
+        return best
+    fallback = []
+    used = set()
+    for pick in picks:
+        key = pick.get("match_key")
+        if key in used:
+            continue
+        fallback.append(pick)
+        used.add(key)
+        if len(fallback) == 2:
+            break
+    if len(fallback) == 2:
+        score, combined_odds = _combine_score(fallback[0], fallback[1], target)
+        return {
+            "matches": fallback,
+            "combined_odds": combined_odds,
+            "score": score,
+            "risk": _risk_label(score),
+            "forced": True,
+        }
+    return None
 def _extract_h2h_outcomes(match: dict) -> list[dict]:
     return _average_market_outcomes(match, "h2h")
 
@@ -1005,6 +1105,238 @@ def _match_key(match: dict) -> str:
     return f"{home_team}-{away_team}-{commence}"
 
 
+def _fetch_scores(api_key: str, sport_key: str, days_from: int = 3) -> list[dict]:
+    days_from = min(max(days_from, 1), 3)
+    try:
+        response = requests.get(
+            f"https://api.the-odds-api.com/v4/sports/{sport_key}/scores",
+            params={"apiKey": api_key, "daysFrom": days_from},
+            timeout=10,
+        )
+        if response.status_code == 200:
+            return response.json()
+    except Exception:
+        return []
+    return []
+
+
+def _result_from_scores(match: dict) -> tuple[int, int] | None:
+    scores = match.get("scores") or []
+    if len(scores) < 2:
+        return None
+    home = scores[0].get("score")
+    away = scores[1].get("score")
+    if home is None or away is None:
+        return None
+    try:
+        return (int(home), int(away))
+    except Exception:
+        return None
+
+
+def _parse_line_from_outcome(outcome: str) -> float | None:
+    parts = outcome.replace("+", " +").replace("-", " -").split()
+    for part in reversed(parts):
+        try:
+            return float(part)
+        except Exception:
+            continue
+    return None
+
+
+def _evaluate_pick(market_key: str, outcome: str, line: float | None, home_goals: int, away_goals: int) -> str:
+    total_goals = home_goals + away_goals
+    outcome_lower = outcome.lower()
+    if market_key == "h2h":
+        if outcome_lower.startswith("hazai"):
+            return "win" if home_goals > away_goals else "lose"
+        if outcome_lower.startswith("vendeg"):
+            return "win" if away_goals > home_goals else "lose"
+        return "win" if home_goals == away_goals else "lose"
+    if market_key == "double_chance":
+        if outcome == "1X":
+            return "win" if home_goals >= away_goals else "lose"
+        if outcome == "X2":
+            return "win" if away_goals >= home_goals else "lose"
+        if outcome == "12":
+            return "win" if home_goals != away_goals else "lose"
+    if market_key == "draw_no_bet":
+        if home_goals == away_goals:
+            return "push"
+        if outcome_lower.startswith("hazai"):
+            return "win" if home_goals > away_goals else "lose"
+        if outcome_lower.startswith("vendeg"):
+            return "win" if away_goals > home_goals else "lose"
+    if market_key in {"totals", "alternate_totals"}:
+        line_val = line if line is not None else _parse_line_from_outcome(outcome)
+        if line_val is None:
+            return "lose"
+        if outcome_lower.startswith("over"):
+            return "win" if total_goals > line_val else ("push" if total_goals == line_val else "lose")
+        if outcome_lower.startswith("under"):
+            return "win" if total_goals < line_val else ("push" if total_goals == line_val else "lose")
+    if market_key in {"team_totals", "alternate_team_totals"}:
+        line_val = line if line is not None else _parse_line_from_outcome(outcome)
+        if line_val is None:
+            return "lose"
+        if outcome_lower.startswith("hazai"):
+            team_goals = home_goals
+        else:
+            team_goals = away_goals
+        if "over" in outcome_lower:
+            return "win" if team_goals > line_val else ("push" if team_goals == line_val else "lose")
+        if "under" in outcome_lower:
+            return "win" if team_goals < line_val else ("push" if team_goals == line_val else "lose")
+    if market_key == "btts":
+        both = home_goals > 0 and away_goals > 0
+        if "igen" in outcome_lower:
+            return "win" if both else "lose"
+        if "nem" in outcome_lower:
+            return "win" if not both else "lose"
+    if market_key in {"spreads", "alternate_spreads"}:
+        line_val = line if line is not None else _parse_line_from_outcome(outcome)
+        if line_val is None:
+            return "lose"
+        if outcome_lower.startswith("hazai"):
+            adjusted = home_goals + line_val
+            if adjusted > away_goals:
+                return "win"
+            if adjusted == away_goals:
+                return "push"
+            return "lose"
+        if outcome_lower.startswith("vendeg"):
+            adjusted = away_goals + line_val
+            if adjusted > home_goals:
+                return "win"
+            if adjusted == home_goals:
+                return "push"
+            return "lose"
+    return "lose"
+
+
+def _settle_saved_picks(db, api_key: str) -> None:
+    if not api_key:
+        return
+    cursor = db.connection.execute(
+        """
+        SELECT id, sport_key, commence_time, home_team, away_team, market_key, outcome, line
+        FROM saved_picks
+        WHERE status = 'pending'
+        """
+    )
+    rows = cursor.fetchall()
+    if not rows:
+        return
+    now = datetime.now(timezone.utc)
+    pending_by_sport: dict[str, list[tuple]] = {}
+    for row in rows:
+        pick_id, sport_key, commence_time, home_team, away_team, market_key, outcome, line = row
+        try:
+            commence_dt = datetime.fromisoformat(str(commence_time).replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if now < commence_dt + timedelta(hours=24):
+            continue
+        pending_by_sport.setdefault(sport_key, []).append(row)
+
+    if not pending_by_sport:
+        return
+
+    for sport_key, picks in pending_by_sport.items():
+        scores = _fetch_scores(api_key, sport_key, days_from=3)
+        result_map: dict[tuple[str, str, str], tuple[int, int]] = {}
+        for match in scores:
+            if not match.get("completed"):
+                continue
+            commence_time = match.get("commence_time")
+            home_team = match.get("home_team")
+            away_team = match.get("away_team")
+            if not commence_time or not home_team or not away_team:
+                continue
+            result = _result_from_scores(match)
+            if result:
+                result_map[(str(commence_time), str(home_team), str(away_team))] = result
+
+        for row in picks:
+            pick_id, _, commence_time, home_team, away_team, market_key, outcome, line = row
+            result = result_map.get((str(commence_time), str(home_team), str(away_team)))
+            if not result:
+                continue
+            home_goals, away_goals = result
+            eval_result = _evaluate_pick(market_key, outcome, line, home_goals, away_goals)
+            db.connection.execute(
+                """
+                UPDATE saved_picks
+                SET status = ?, settled_at = ?, result = ?
+                WHERE id = ?
+                """,
+                ("settled", now.isoformat(), eval_result, pick_id),
+            )
+    db.connection.commit()
+
+
+def _save_pick(db, payload: dict) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    db.connection.execute(
+        """
+        INSERT INTO saved_picks
+        (created_at, sport_key, commence_time, home_team, away_team, market_key, outcome, line, odds, score, risk, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            now,
+            payload.get("sport_key", ""),
+            payload.get("commence_time", ""),
+            payload.get("home_team", ""),
+            payload.get("away_team", ""),
+            payload.get("market_key", ""),
+            payload.get("outcome", ""),
+            payload.get("line"),
+            float(payload.get("odds", 0.0)),
+            float(payload.get("score", 0.0)),
+            payload.get("risk", "yellow"),
+            "pending",
+        ),
+    )
+    db.connection.commit()
+
+
+def _list_saved_picks(db) -> list[dict]:
+    cursor = db.connection.execute(
+        """
+        SELECT created_at, home_team, away_team, market_key, outcome, odds, status, result
+        FROM saved_picks
+        ORDER BY created_at DESC
+        LIMIT 100
+        """
+    )
+    rows = cursor.fetchall()
+    results = []
+    for created_at, home_team, away_team, market_key, outcome, odds, status, result in rows:
+        if result == "win":
+            result_label = "nyert"
+        elif result == "lose":
+            result_label = "vesztett"
+        elif result == "push":
+            result_label = "visszajaro"
+        else:
+            result_label = "-"
+        results.append(
+            {
+                "created_at": str(created_at)[:16],
+                "home_team": home_team,
+                "away_team": away_team,
+                "market_key": market_key,
+                "market_label": _market_label(market_key),
+                "outcome": outcome,
+                "odds": float(odds),
+                "status": status,
+                "result_label": result_label,
+            }
+        )
+    return results
+
+
 def _select_picks_near_odds(picks: list[dict], target: float, limit: int = 2) -> list[dict]:
     candidates = [pick for pick in picks if abs(pick.get("odds", 0.0) - target) <= 0.15]
     candidates.sort(key=lambda item: (item["distance"], -item["score"]))
@@ -1106,6 +1438,16 @@ TEMPLATE = """
     </div>
 
     <div class="container my-5">
+        <ul class="nav nav-tabs mb-4">
+            <li class="nav-item">
+                <a class="nav-link {{ "active" if active_tab == "tips" else "" }}" href="/?tab=tips">Tippek</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {{ "active" if active_tab == "saved" else "" }}" href="/?tab=saved">Mentett tippek</a>
+            </li>
+        </ul>
+        <div class="tab-content">
+            <div class="tab-pane fade {{ "show active" if active_tab == "tips" else "" }}">
         <div class="row">
             <div class="col-md-6">
                 <div class="card mb-4">
@@ -1186,6 +1528,9 @@ TEMPLATE = """
                             <p class="text-center mb-2">
                                 <strong>Ossz odds: {{ "%.2f"|format(best_combo.combined_odds) }}</strong>
                             </p>
+                            {% if best_combo.forced %}
+                                <p class="text-muted text-center">Nem volt 2.00 +/- 0.15 sav, ez a legjobb elerheto kombi.</p>
+                            {% endif %}
                             <table class="table table-striped text-center">
                                 <thead>
                                     <tr>
@@ -1196,6 +1541,7 @@ TEMPLATE = """
                                         <th>Pont</th>
                                         <th>Kockazat</th>
                                         <th>Indok</th>
+                                        <th>Mentes</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -1208,6 +1554,21 @@ TEMPLATE = """
                                         <td>{{ "%.2f"|format(pick.score) }}</td>
                                         <td>{{ "zold" if best_combo.risk == "green" else ("sarga" if best_combo.risk == "yellow" else "piros") }}</td>
                                         <td>{{ ", ".join(_match_reasons(pick)) }}</td>
+                                        <td>
+                                            <form method="post" action="/save_pick">
+                                                <input type="hidden" name="sport_key" value="{{ pick.sport_key }}">
+                                                <input type="hidden" name="commence_time" value="{{ pick.commence_time }}">
+                                                <input type="hidden" name="home_team" value="{{ pick.home_team }}">
+                                                <input type="hidden" name="away_team" value="{{ pick.away_team }}">
+                                                <input type="hidden" name="market_key" value="{{ pick.market_key }}">
+                                                <input type="hidden" name="outcome" value="{{ pick.outcome }}">
+                                                <input type="hidden" name="line" value="{{ pick.line }}">
+                                                <input type="hidden" name="odds" value="{{ pick.odds }}">
+                                                <input type="hidden" name="score" value="{{ pick.score }}">
+                                                <input type="hidden" name="risk" value="{{ best_combo.risk }}">
+                                                <button class="btn btn-sm btn-outline-primary" type="submit">Mentem</button>
+                                            </form>
+                                        </td>
                                     </tr>
                                     {% endfor %}
                                 </tbody>
@@ -1228,37 +1589,47 @@ TEMPLATE = """
                         <h5 class="mb-0">Ket meccs 2.00 koruli oddssal</h5>
                     </div>
                     <div class="card-body">
-                        <form method="get" class="text-center mb-3">
-                            <input type="hidden" name="tips" value="1">
-                            <button class="btn btn-success" type="submit">Mutass 2 meccset 2.00 korul</button>
-                        </form>
-                        {% if tips_requested %}
-                            {% if target_matches %}
-                                <table class="table table-striped text-center">
-                                    <thead>
-                                        <tr>
-                                            <th>Match</th>
-                                            <th>Piac</th>
-                                            <th>Kimenetel</th>
-                                            <th>Odds</th>
-                                            <th>Pont</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {% for match in target_matches %}
-                                        <tr>
-                                            <td>{{ match.home_team }} vs {{ match.away_team }}</td>
-                                            <td>{{ match.market_label }}</td>
-                                            <td>{{ match.outcome }}</td>
-                                            <td><strong>{{ "%.2f"|format(match.odds) }}</strong></td>
-                                            <td>{{ "%.2f"|format(match.score) }}</td>
-                                        </tr>
-                                        {% endfor %}
-                                    </tbody>
-                                </table>
-                            {% else %}
-                                <p class="text-muted text-center">Nincs meccs 2.00 koruli oddssal.</p>
-                            {% endif %}
+                        {% if target_matches %}
+                            <table class="table table-striped text-center">
+                                <thead>
+                                    <tr>
+                                        <th>Match</th>
+                                        <th>Piac</th>
+                                        <th>Kimenetel</th>
+                                        <th>Odds</th>
+                                        <th>Pont</th>
+                                        <th>Mentes</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for match in target_matches %}
+                                    <tr>
+                                        <td>{{ match.home_team }} vs {{ match.away_team }}</td>
+                                        <td>{{ match.market_label }}</td>
+                                        <td>{{ match.outcome }}</td>
+                                        <td><strong>{{ "%.2f"|format(match.odds) }}</strong></td>
+                                        <td>{{ "%.2f"|format(match.score) }}</td>
+                                        <td>
+                                            <form method="post" action="/save_pick">
+                                                <input type="hidden" name="sport_key" value="{{ match.sport_key }}">
+                                                <input type="hidden" name="commence_time" value="{{ match.commence_time }}">
+                                                <input type="hidden" name="home_team" value="{{ match.home_team }}">
+                                                <input type="hidden" name="away_team" value="{{ match.away_team }}">
+                                                <input type="hidden" name="market_key" value="{{ match.market_key }}">
+                                                <input type="hidden" name="outcome" value="{{ match.outcome }}">
+                                                <input type="hidden" name="line" value="{{ match.line }}">
+                                                <input type="hidden" name="odds" value="{{ match.odds }}">
+                                                <input type="hidden" name="score" value="{{ match.score }}">
+                                                <input type="hidden" name="risk" value="{{ "green" if match.score >= 0.85 else ("yellow" if match.score >= 0.69 else "red") }}">
+                                                <button class="btn btn-sm btn-outline-primary" type="submit">Mentem</button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        {% else %}
+                            <p class="text-muted text-center">Nincs meccs 2.00 koruli oddssal.</p>
                         {% endif %}
                     </div>
                 </div>
@@ -1296,24 +1667,28 @@ TEMPLATE = """
                         <h5 class="mb-0">Legutobbi meccsek</h5>
                     </div>
                     <div class="card-body">
-                        <table class="table table-hover">
-                            <thead>
-                                <tr>
-                                    <th>Hazai</th>
-                                    <th>Vendeg</th>
-                                    <th>Eredmeny</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% for match in matches %}
-                                <tr>
-                                    <td>{{ match.home_team }}</td>
-                                    <td>{{ match.away_team }}</td>
-                                    <td><span class="badge bg-primary">{{ match.home_score }}-{{ match.away_score }}</span></td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
+                        {% if recent_matches %}
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Hazai</th>
+                                        <th>Vendeg</th>
+                                        <th>Eredmeny</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for match in recent_matches %}
+                                    <tr>
+                                        <td>{{ match.home_team }}</td>
+                                        <td>{{ match.away_team }}</td>
+                                        <td><span class="badge bg-primary">{{ match.score }}</span></td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        {% else %}
+                            <p class="text-muted text-center">Nincs elerheto valos meccsadat.</p>
+                        {% endif %}
                     </div>
                 </div>
             </div>
@@ -1323,24 +1698,73 @@ TEMPLATE = """
                         <h5 class="mb-0">Tabella</h5>
                     </div>
                     <div class="card-body">
-                        <table class="table table-hover">
-                            <thead>
-                                <tr>
-                                    <th>Hely</th>
-                                    <th>Csapat</th>
-                                    <th>Pont</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% for team, points in points_table %}
-                                <tr>
-                                    <td>{{ loop.index }}</td>
-                                    <td>{{ team }}</td>
-                                    <td><span class="badge bg-success">{{ points }}</span></td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
+                        {% if standings %}
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Hely</th>
+                                        <th>Csapat</th>
+                                        <th>Pont</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for row in standings %}
+                                    <tr>
+                                        <td>{{ row.position }}</td>
+                                        <td>{{ row.team }}</td>
+                                        <td><span class="badge bg-success">{{ row.points }}</span></td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        {% else %}
+                            <p class="text-muted text-center">Nincs elerheto tabellaadat.</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+            </div>
+            <div class="tab-pane fade {{ "show active" if active_tab == "saved" else "" }}">
+                <div class="row">
+                    <div class="col-12">
+                        <div class="card mb-4">
+                            <div class="card-header bg-primary text-white">
+                                <h5 class="mb-0">Mentett tippek</h5>
+                            </div>
+                            <div class="card-body">
+                                {% if saved_picks %}
+                                    <table class="table table-striped text-center">
+                                        <thead>
+                                            <tr>
+                                                <th>Datum</th>
+                                                <th>Meccs</th>
+                                                <th>Piac</th>
+                                                <th>Kimenetel</th>
+                                                <th>Odds</th>
+                                                <th>Allapot</th>
+                                                <th>Eredmeny</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {% for pick in saved_picks %}
+                                            <tr>
+                                                <td>{{ pick.created_at }}</td>
+                                                <td>{{ pick.home_team }} vs {{ pick.away_team }}</td>
+                                                <td>{{ pick.market_label }}</td>
+                                                <td>{{ pick.outcome }}</td>
+                                                <td>{{ "%.2f"|format(pick.odds) }}</td>
+                                                <td>{{ pick.status }}</td>
+                                                <td>{{ pick.result_label }}</td>
+                                            </tr>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
+                                {% else %}
+                                    <p class="text-muted text-center">Nincs mentett tipp.</p>
+                                {% endif %}
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1383,38 +1807,31 @@ TEMPLATE = """
 
 @app.route('/')
 def dashboard():
-    tips_requested = request.args.get("tips") == "1"
+    active_tab = request.args.get("tab", "tips")
     target_odds = 2.0
     window_hours = 24
 
     db = connect(config.db_url)
     db.ensure_schema()
     matches = list_matches(db)
-    if not matches:
-        sample_matches = [
-            Match("Csapat A", "Csapat B", 2, 1, "2023-01-01"),
-            Match("Csapat A", "Csapat C", 1, 1, "2023-01-02"),
-            Match("Csapat B", "Csapat C", 0, 3, "2023-01-03"),
-        ]
-        for match in sample_matches:
-            try:
-                add_match(db, match)
-            except Exception:
-                pass  # Already exists
-        matches = list_matches(db)
     points_map = table(matches)
-    points_table = sorted(points_map.items(), key=lambda x: x[1], reverse=True)
     form_scores = _build_form_scores(matches)
     table_scores = _build_table_scores(points_map)
 
     # Fetch competitions
     competitions = []
+    recent_matches = []
+    standings = []
     try:
         headers = {"X-Auth-Token": config.football_data_token}
         response = requests.get("https://api.football-data.org/v4/competitions", headers=headers, timeout=10)
         if response.status_code == 200:
             data = response.json()
             competitions = data.get('competitions', [])[:3]
+            primary = _primary_competition(competitions)
+            if primary:
+                recent_matches = _fetch_recent_matches_fd(config.football_data_token, primary)
+                standings = _fetch_standings_fd(config.football_data_token, primary)
     except Exception:
         pass
 
@@ -1511,10 +1928,13 @@ def dashboard():
                         "tip": tip,
                     }
 
-            if tips_requested and picks:
+            if picks:
                 target_matches = _select_picks_near_odds(picks, target_odds, limit=2)
     except Exception:
         pass
+
+    _settle_saved_picks(db, config.odds_api_key)
+    saved_picks = _list_saved_picks(db)
 
     rss_sources = ", ".join(
         sorted({item.get("source", "") for item in rss_items if item.get("source")})
@@ -1527,13 +1947,39 @@ def dashboard():
                                   best_pick=best_pick,
                                   best_combo=best_combo,
                                   odds_count=odds_count,
-                                  tips_requested=tips_requested,
                                   target_matches=target_matches,
-                                  matches=matches,
-                                  points_table=points_table,
+                                  recent_matches=recent_matches,
+                                  standings=standings,
                                   _match_reasons=_match_reasons,
                                   rss_items=rss_items,
-                                  rss_sources=rss_sources)
+                                  rss_sources=rss_sources,
+                                  saved_picks=saved_picks,
+                                  active_tab=active_tab)
+
+
+@app.route("/save_pick", methods=["POST"])
+def save_pick():
+    db = connect(config.db_url)
+    db.ensure_schema()
+    payload = {
+        "sport_key": request.form.get("sport_key", ""),
+        "commence_time": request.form.get("commence_time", ""),
+        "home_team": request.form.get("home_team", ""),
+        "away_team": request.form.get("away_team", ""),
+        "market_key": request.form.get("market_key", ""),
+        "outcome": request.form.get("outcome", ""),
+        "line": request.form.get("line") or None,
+        "odds": request.form.get("odds", "0"),
+        "score": request.form.get("score", "0"),
+        "risk": request.form.get("risk", "yellow"),
+    }
+    try:
+        if payload["line"] is not None:
+            payload["line"] = float(payload["line"])
+    except Exception:
+        payload["line"] = None
+    _save_pick(db, payload)
+    return redirect(url_for("dashboard", tab="saved"))
 
 if __name__ == '__main__':
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"

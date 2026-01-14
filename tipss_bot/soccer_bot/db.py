@@ -56,6 +56,33 @@ class Database:
             ON odds_snapshots (sport_key, commence_time, home_team, away_team, outcome)
             """
         )
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS saved_picks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                sport_key TEXT NOT NULL,
+                commence_time TEXT NOT NULL,
+                home_team TEXT NOT NULL,
+                away_team TEXT NOT NULL,
+                market_key TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                line REAL,
+                odds REAL NOT NULL,
+                score REAL NOT NULL,
+                risk TEXT NOT NULL,
+                status TEXT NOT NULL,
+                settled_at TEXT,
+                result TEXT
+            )
+            """
+        )
+        self.connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS saved_picks_status
+            ON saved_picks (status, commence_time)
+            """
+        )
         self.connection.commit()
 
 
