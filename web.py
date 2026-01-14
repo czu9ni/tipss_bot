@@ -1465,17 +1465,51 @@ TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Soccer Bot - Profi AI Tipp Dashboard</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
     <style>
-        .hero { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 60px 0; }
-        .card { border: none; box-shadow: 0 4px 8px rgba(0,0,0,0.1); transition: transform 0.2s; }
-        .card:hover { transform: translateY(-5px); }
-        .tip-highlight { background-color: #e8f5e8; border-left: 5px solid #28a745; }
-        .odds-table th { background-color: #f8f9fa; }
-        .badge { font-size: 0.9em; }
-        .ai-tip { font-size: 1.2em; font-weight: bold; }
-        .risk-green { background-color: #d4edda; }
-        .risk-yellow { background-color: #fff3cd; }
-        .risk-red { background-color: #f8d7da; }
+        :root {
+            --bg: #0f1115;
+            --panel: #171a22;
+            --panel-soft: #1e2230;
+            --ink: #e9edf2;
+            --muted: #9aa4b2;
+            --accent: #4dffb0;
+            --accent-2: #33b6ff;
+            --warning: #ffd166;
+            --danger: #ff6b6b;
+            --radius: 18px;
+        }
+        body { font-family: "Space Grotesk", system-ui, -apple-system, sans-serif; background: radial-gradient(circle at 20% 10%, #1b2030 0%, #0f1115 40%, #0b0d12 100%); color: var(--ink); }
+        .hero { background: linear-gradient(135deg, rgba(77,255,176,0.18), rgba(51,182,255,0.15)), linear-gradient(120deg, #1b1f2b 0%, #0f1115 60%); color: var(--ink); padding: 70px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+        .hero .display-4 { font-weight: 700; letter-spacing: -0.5px; }
+        .hero .lead { color: var(--muted); }
+        .card { border: 1px solid rgba(255,255,255,0.06); background: var(--panel); box-shadow: 0 12px 24px rgba(5,8,15,0.35); transition: transform 0.2s ease, box-shadow 0.2s ease; border-radius: var(--radius); }
+        .card:hover { transform: translateY(-4px); box-shadow: 0 16px 30px rgba(5,8,15,0.45); }
+        .card-header { border-bottom: 1px solid rgba(255,255,255,0.06); }
+        .card-header.bg-primary { background: linear-gradient(120deg, #3a7bd5, #00d2ff); color: #0b0d12; }
+        .card-header.bg-success { background: linear-gradient(120deg, #2fe59b, #1dd3b0); color: #0b0d12; }
+        .card-header.bg-warning { background: linear-gradient(120deg, #ffd166, #ff9f1c); color: #2b1d00; }
+        .card-header.bg-dark { background: linear-gradient(120deg, #2b2f3a, #1c1f29); color: var(--ink); }
+        .card-header.bg-secondary { background: linear-gradient(120deg, #374151, #1f2937); color: var(--ink); }
+        .card-header.bg-light { background: linear-gradient(120deg, #e5e7eb, #f8fafc); color: #0b0d12; }
+        .tip-highlight { background: var(--panel-soft); border-left: 5px solid var(--accent); }
+        .odds-table th { background-color: rgba(255,255,255,0.04); color: var(--muted); }
+        .badge { font-size: 0.9em; font-family: "JetBrains Mono", monospace; }
+        .ai-tip { font-size: 1.05rem; font-weight: 600; }
+        .risk-green { background-color: rgba(77,255,176,0.15); }
+        .risk-yellow { background-color: rgba(255,209,102,0.18); }
+        .risk-red { background-color: rgba(255,107,107,0.18); }
+        .nav-tabs { border-bottom: none; }
+        .nav-tabs .nav-link { color: var(--muted); border: none; border-radius: 999px; }
+        .nav-tabs .nav-link.active { background: var(--panel-soft); color: var(--ink); }
+        .btn-success { background: var(--accent); border: none; color: #0b0d12; font-weight: 600; }
+        .btn-outline-primary { border-color: var(--accent-2); color: var(--accent-2); }
+        .btn-outline-primary:hover { background: var(--accent-2); color: #0b0d12; }
+        .table { color: var(--ink); }
+        .table-striped > tbody > tr:nth-of-type(odd) { background-color: rgba(255,255,255,0.03); }
+        .text-muted { color: var(--muted) !important; }
+        .fade-in { animation: fadeInUp 0.6s ease both; }
+        @keyframes fadeInUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
     </style>
 </head>
 <body>
@@ -1507,7 +1541,7 @@ TEMPLATE = """
             <div class="tab-pane fade {{ "show active" if active_tab == "tips" else "" }}">
         <div class="row">
             <div class="col-md-6">
-                <div class="card mb-4">
+                <div class="card mb-4 fade-in">
                     <div class="card-header bg-primary text-white">
                         <h5 class="mb-0">API Allapot</h5>
                     </div>
@@ -1523,7 +1557,7 @@ TEMPLATE = """
                 </div>
             </div>
             <div class="col-md-6">
-                <div class="card mb-4">
+                <div class="card mb-4 fade-in">
                     <div class="card-header bg-success text-white">
                         <h5 class="mb-0">Aktiv bajnoksagok</h5>
                     </div>
@@ -1573,6 +1607,26 @@ TEMPLATE = """
                         {% else %}
                         <p class="text-muted text-center">Jelenleg nincs elerheto elo odds.</p>
                         {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-12">
+                <div class="card mb-4 fade-in">
+                    <div class="card-header bg-dark text-white">
+                        <h5 class="mb-0">Megbizhatosag es kulonbseg</h5>
+                    </div>
+                    <div class="card-body">
+                        <p class="text-muted mb-2">
+                            Ez a robot nem garantal nyerest. A tippek sulyozott szurok: odds, Elo, forma,
+                            tabella, hirek, idojaras. A cel az, hogy a piac altal adott oddsokon belul
+                            olyan kimeneteleket emeljen ki, ahol a model valoszinuseg nagyobb az implied probability-nel.
+                        </p>
+                        <p class="text-muted mb-0">
+                            Kulonbseg a sima odds-hoz kepest: a piac csak arat ad, a robot ezt kiegesziti
+                            a csapatok aktualis allapotaval, es rangsorol egy valoszinusegi pontszam alapjan.
+                        </p>
                     </div>
                 </div>
             </div>
