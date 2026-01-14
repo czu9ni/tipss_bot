@@ -1025,7 +1025,8 @@ def _fetch_upcoming_fixtures_fd(token: str, comp_code: str, hours: int = 24, lim
     try:
         now = datetime.now(timezone.utc)
         date_from = now.date().isoformat()
-        date_to = (now + timedelta(days=2)).date().isoformat()
+        days_ahead = max(1, int(math.ceil(hours / 24)))
+        date_to = (now + timedelta(days=days_ahead)).date().isoformat()
         response = requests.get(
             f"https://api.football-data.org/v4/competitions/{comp_code}/matches",
             headers={"X-Auth-Token": token},
