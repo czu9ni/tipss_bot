@@ -36,6 +36,26 @@ class Database:
             ON matches (home_team, away_team, date)
             """
         )
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS odds_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sport_key TEXT NOT NULL,
+                commence_time TEXT NOT NULL,
+                home_team TEXT NOT NULL,
+                away_team TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                odds REAL NOT NULL,
+                captured_at TEXT NOT NULL
+            )
+            """
+        )
+        self.connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS odds_snapshots_unique
+            ON odds_snapshots (sport_key, commence_time, home_team, away_team, outcome)
+            """
+        )
         self.connection.commit()
 
 
