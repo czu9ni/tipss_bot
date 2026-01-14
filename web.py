@@ -31,6 +31,7 @@ _RIVALRIES_CACHE: list[tuple[str, str]] | None = None
 _TEAM_LOCATION_OVERRIDES: dict[str, dict] | None = None
 _SPORTS_CACHE: dict[str, object] = {"fetched_at": 0.0, "keys": []}
 _ODDS_LAST_ERROR: str | None = None
+_CACHE_KEY = "latest_picks"
 SPORTS_CACHE_TTL_SECONDS = 3600
 _ELO_CACHE: dict[str, float] = {}
 _TEAM_ID_MAP: dict[str, int] | None = None
@@ -1340,6 +1341,36 @@ def _list_saved_picks(db) -> list[dict]:
     return results
 
 
+def _store_cached_picks(db, payload: dict) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    db.connection.execute(
+        """
+        INSERT INTO cached_picks (key, payload, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at
+        """,
+        (_CACHE_KEY, json.dumps(payload), now),
+    )
+    db.connection.commit()
+
+
+def _load_cached_picks(db) -> dict | None:
+    cursor = db.connection.execute(
+        "SELECT payload, updated_at FROM cached_picks WHERE key = ?",
+        (_CACHE_KEY,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+    payload, updated_at = row
+    try:
+        data = json.loads(payload)
+        data["updated_at"] = updated_at
+        return data
+    except Exception:
+        return None
+
+
 def _select_picks_near_odds(picks: list[dict], target: float, limit: int = 2) -> list[dict]:
     candidates = [pick for pick in picks if abs(pick.get("odds", 0.0) - target) <= 0.15]
     candidates.sort(key=lambda item: (item["distance"], -item["score"]))
@@ -1456,14 +1487,22 @@ TEMPLATE = """
     </div>
 
     <div class="container my-5">
-        <ul class="nav nav-tabs mb-4">
-            <li class="nav-item">
-                <a class="nav-link {{ "active" if active_tab == "tips" else "" }}" href="/?tab=tips">Tippek</a>
-            </li>
-            <li class="nav-item">
-                <a class="nav-link {{ "active" if active_tab == "saved" else "" }}" href="/?tab=saved">Mentett tippek</a>
-            </li>
-        </ul>
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <ul class="nav nav-tabs">
+                <li class="nav-item">
+                    <a class="nav-link {{ "active" if active_tab == "tips" else "" }}" href="/?tab=tips">Tippek</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {{ "active" if active_tab == "saved" else "" }}" href="/?tab=saved">Mentett tippek</a>
+                </li>
+            </ul>
+            <div>
+                <a class="btn btn-success" href="/?tab={{ active_tab }}&refresh=1">Frissits tippeket</a>
+                {% if cached_updated_at %}
+                    <span class="text-muted ms-2">Utolso frissites: {{ cached_updated_at[:16] }}</span>
+                {% endif %}
+            </div>
+        </div>
         <div class="tab-content">
             <div class="tab-pane fade {{ "show active" if active_tab == "tips" else "" }}">
         <div class="row">
@@ -1902,6 +1941,7 @@ TEMPLATE = """
 @app.route('/')
 def dashboard():
     active_tab = request.args.get("tab", "tips")
+    refresh_requested = request.args.get("refresh") == "1"
     target_odds = 2.0
     window_hours = 24
 
@@ -1937,103 +1977,128 @@ def dashboard():
     odds_error = None
     best_pick = None
     best_combo = None
-    try:
-        data, odds_error = _fetch_odds_matches(config.odds_api_key)
-        eligible = []
-        if data:
-            for match in data:
-                home_team = match.get("home_team", "")
-                away_team = match.get("away_team", "")
-                if not _within_hours(match, window_hours):
-                    continue
-                if _is_rivalry(home_team, away_team):
-                    continue
-                eligible.append(match)
-        if eligible:
-            odds_count = len(eligible)
-            rss_items = _fetch_rss_items()
-            picks: list[dict] = []
-            for match in eligible:
-                picks.extend(_build_picks_for_match(match, target_odds, rss_items, db, form_scores, table_scores))
-            if picks:
-                best_combo = _build_best_combo(picks, target_odds)
-                best_pick = max(picks, key=lambda item: item["score"])
+    cached_updated_at = None
+    if refresh_requested:
+        try:
+            data, odds_error = _fetch_odds_matches(config.odds_api_key)
+            eligible = []
+            if data:
+                for match in data:
+                    home_team = match.get("home_team", "")
+                    away_team = match.get("away_team", "")
+                    if not _within_hours(match, window_hours):
+                        continue
+                    if _is_rivalry(home_team, away_team):
+                        continue
+                    eligible.append(match)
+            if eligible:
+                odds_count = len(eligible)
+                rss_items = _fetch_rss_items()
+                picks: list[dict] = []
+                for match in eligible:
+                    picks.extend(_build_picks_for_match(match, target_odds, rss_items, db, form_scores, table_scores))
+                if picks:
+                    best_combo = _build_best_combo(picks, target_odds)
+                    best_pick = max(picks, key=lambda item: item["score"])
 
-            odds_match = None
-            for match in eligible:
-                outcomes = _extract_h2h_outcomes(match)
-                home_team = match.get("home_team", "")
-                away_team = match.get("away_team", "")
-                if home_team and away_team and outcomes:
-                    odds_match = match
-                    break
-            if odds_match:
-                home_team = odds_match.get("home_team", "")
-                away_team = odds_match.get("away_team", "")
-                outcomes = _extract_h2h_outcomes(odds_match)
-                home_odds = _find_price(outcomes, home_team)
-                away_odds = _find_price(outcomes, away_team)
-                draw_odds = _find_price(outcomes, "Draw")
-                if home_odds is not None and away_odds is not None and draw_odds is not None:
-                    home_stats = get_team_stats(db, home_team)
-                    away_stats = get_team_stats(db, away_team)
-                    stats_factor = (home_stats["win_rate"] - away_stats["win_rate"]) * 0.2
+                odds_match = None
+                for match in eligible:
+                    outcomes = _extract_h2h_outcomes(match)
+                    home_team = match.get("home_team", "")
+                    away_team = match.get("away_team", "")
+                    if home_team and away_team and outcomes:
+                        odds_match = match
+                        break
+                if odds_match:
+                    home_team = odds_match.get("home_team", "")
+                    away_team = odds_match.get("away_team", "")
+                    outcomes = _extract_h2h_outcomes(odds_match)
+                    home_odds = _find_price(outcomes, home_team)
+                    away_odds = _find_price(outcomes, away_team)
+                    draw_odds = _find_price(outcomes, "Draw")
+                    if home_odds is not None and away_odds is not None and draw_odds is not None:
+                        home_stats = get_team_stats(db, home_team)
+                        away_stats = get_team_stats(db, away_team)
+                        stats_factor = (home_stats["win_rate"] - away_stats["win_rate"]) * 0.2
 
-                    home_prob = 1 / home_odds
-                    away_prob = 1 / away_odds
-                    draw_prob = 1 / draw_odds
-                    home_score = home_prob * 0.4 + (1 if home_odds < 2.5 else 0) * 0.1
-                    away_score = away_prob * 0.4 + (1 if away_odds < 2.5 else 0) * 0.1
-                    draw_score = draw_prob * 0.2
+                        home_prob = 1 / home_odds
+                        away_prob = 1 / away_odds
+                        draw_prob = 1 / draw_odds
+                        home_score = home_prob * 0.4 + (1 if home_odds < 2.5 else 0) * 0.1
+                        away_score = away_prob * 0.4 + (1 if away_odds < 2.5 else 0) * 0.1
+                        draw_score = draw_prob * 0.2
 
-                    weather_factor = _weather_factor(home_team)
-                    news_factor = _news_factor(rss_items, home_team, away_team)
+                        weather_factor = _weather_factor(home_team)
+                        news_factor = _news_factor(rss_items, home_team, away_team)
 
-                    home_final = home_score + stats_factor + weather_factor + news_factor
-                    away_final = away_score + stats_factor + weather_factor + news_factor
-                    draw_final = draw_score
+                        home_final = home_score + stats_factor + weather_factor + news_factor
+                        away_final = away_score + stats_factor + weather_factor + news_factor
+                        draw_final = draw_score
 
-                    if home_final > away_final and home_final > draw_final:
-                        tip = (
-                            "Hazai gyozelem (AI: valoszinuseg "
-                            f"{home_prob:.2f}, stats {stats_factor:.2f}, "
-                            f"idojaras {weather_factor:.2f}, hirek {news_factor:.2f})"
-                        )
-                    elif away_final > home_final and away_final > draw_final:
-                        tip = (
-                            "Vendeg gyozelem (AI: valoszinuseg "
-                            f"{away_prob:.2f}, stats {stats_factor:.2f}, "
-                            f"idojaras {weather_factor:.2f}, hirek {news_factor:.2f})"
-                        )
-                    else:
-                        tip = (
-                            "Donto (AI: valoszinuseg "
-                            f"{draw_prob:.2f}, stats {stats_factor:.2f}, "
-                            f"idojaras {weather_factor:.2f}, hirek {news_factor:.2f})"
-                        )
-                    odds_data = {
-                        "home_team": home_team,
-                        "away_team": away_team,
-                        "home_odds": home_odds,
-                        "draw_odds": draw_odds,
-                        "away_odds": away_odds,
-                        "home_prob": home_prob,
-                        "draw_prob": draw_prob,
-                        "away_prob": away_prob,
-                        "tip": tip,
-                    }
+                        if home_final > away_final and home_final > draw_final:
+                            tip = (
+                                "Hazai gyozelem (AI: valoszinuseg "
+                                f"{home_prob:.2f}, stats {stats_factor:.2f}, "
+                                f"idojaras {weather_factor:.2f}, hirek {news_factor:.2f})"
+                            )
+                        elif away_final > home_final and away_final > draw_final:
+                            tip = (
+                                "Vendeg gyozelem (AI: valoszinuseg "
+                                f"{away_prob:.2f}, stats {stats_factor:.2f}, "
+                                f"idojaras {weather_factor:.2f}, hirek {news_factor:.2f})"
+                            )
+                        else:
+                            tip = (
+                                "Donto (AI: valoszinuseg "
+                                f"{draw_prob:.2f}, stats {stats_factor:.2f}, "
+                                f"idojaras {weather_factor:.2f}, hirek {news_factor:.2f})"
+                            )
+                        odds_data = {
+                            "home_team": home_team,
+                            "away_team": away_team,
+                            "home_odds": home_odds,
+                            "draw_odds": draw_odds,
+                            "away_odds": away_odds,
+                            "home_prob": home_prob,
+                            "draw_prob": draw_prob,
+                            "away_prob": away_prob,
+                            "tip": tip,
+                        }
 
-            if picks:
-                target_matches = _select_picks_near_odds(picks, target_odds, limit=2)
-    except Exception:
-        pass
-
-    _settle_saved_picks(db, config.odds_api_key)
+                if picks:
+                    target_matches = _select_picks_near_odds(picks, target_odds, limit=2)
+            _store_cached_picks(
+                db,
+                {
+                    "odds_data": odds_data,
+                    "best_pick": best_pick,
+                    "best_combo": best_combo,
+                    "target_matches": target_matches,
+                    "odds_count": odds_count,
+                    "odds_error": odds_error,
+                    "rss_sources": ", ".join(sorted({item.get("source", "") for item in rss_items if item.get("source")})),
+                },
+            )
+        except Exception:
+            pass
+        _settle_saved_picks(db, config.odds_api_key)
+    else:
+        cached = _load_cached_picks(db)
+        if cached:
+            odds_data = cached.get("odds_data")
+            best_pick = cached.get("best_pick")
+            best_combo = cached.get("best_combo")
+            target_matches = cached.get("target_matches", [])
+            odds_count = cached.get("odds_count", 0)
+            odds_error = cached.get("odds_error")
+            cached_updated_at = cached.get("updated_at")
     saved_picks = _list_saved_picks(db)
 
     rss_sources = ", ".join(
         sorted({item.get("source", "") for item in rss_items if item.get("source")})
     )
+    if cached_updated_at and not rss_sources:
+        rss_sources = cached.get("rss_sources", "") if cached else ""
     return render_template_string(TEMPLATE,
                                   odds_configured=bool(config.odds_api_key),
                                   football_configured=bool(config.football_data_token),
@@ -2049,6 +2114,7 @@ def dashboard():
                                   rss_items=rss_items,
                                   rss_sources=rss_sources,
                                   saved_picks=saved_picks,
+                                  cached_updated_at=cached_updated_at,
                                   odds_error=odds_error,
                                   active_tab=active_tab)
 

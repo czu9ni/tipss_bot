@@ -83,6 +83,16 @@ class Database:
             ON saved_picks (status, commence_time)
             """
         )
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cached_picks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                key TEXT NOT NULL UNIQUE,
+                payload TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         self.connection.commit()
 
 
