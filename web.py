@@ -30,6 +30,10 @@ _RIVALRIES_CACHE: list[tuple[str, str]] | None = None
 _TEAM_LOCATION_OVERRIDES: dict[str, dict] | None = None
 _SPORTS_CACHE: dict[str, object] = {"fetched_at": 0.0, "keys": []}
 SPORTS_CACHE_TTL_SECONDS = 3600
+_ELO_CACHE: dict[str, float] = {}
+_TEAM_ID_MAP: dict[str, int] | None = None
+_FORM_CACHE: dict[int, tuple[float, float]] = {}
+_FORM_CACHE_TTL_SECONDS = 3600
 
 
 def _strip_html(text: str) -> str:
@@ -79,13 +83,11 @@ def _load_weights() -> dict[str, float]:
     if _WEIGHTS_CACHE is not None:
         return _WEIGHTS_CACHE
     defaults = {
-        "odds_distance": 0.45,
-        "implied_prob": 0.2,
-        "news": 0.2,
+        "elo": 0.5,
+        "form": 0.2,
+        "market": 0.15,
+        "injury": 0.1,
         "weather": 0.05,
-        "stats": 0.05,
-        "form": 0.03,
-        "table": 0.02,
     }
     path = os.path.join("data", "weights.json")
     if os.path.exists(path):
@@ -98,6 +100,170 @@ def _load_weights() -> dict[str, float]:
             pass
     _WEIGHTS_CACHE = defaults
     return defaults
+
+
+def _normalize_name(name: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]", "", name.lower())
+    cleaned = cleaned.replace("fc", "").replace("cf", "").replace("afc", "")
+    return cleaned
+
+
+def _team_id_map() -> dict[str, int]:
+    global _TEAM_ID_MAP
+    if _TEAM_ID_MAP is not None:
+        return _TEAM_ID_MAP
+    _TEAM_ID_MAP = {}
+    try:
+        headers = {"X-Auth-Token": config.football_data_token}
+        response = requests.get("https://api.football-data.org/v4/competitions", headers=headers, timeout=15)
+        if response.status_code != 200:
+            return _TEAM_ID_MAP
+        competitions = response.json().get("competitions", [])
+        max_comp = int(os.environ.get("FD_TEAMMAP_MAX_COMP", "10"))
+        for comp in competitions[:max_comp]:
+            comp_code = comp.get("code")
+            if not comp_code:
+                continue
+            teams_resp = requests.get(
+                f"https://api.football-data.org/v4/competitions/{comp_code}/teams",
+                headers=headers,
+                timeout=15,
+            )
+            if teams_resp.status_code != 200:
+                continue
+            for team in teams_resp.json().get("teams", []):
+                team_id = team.get("id")
+                if not team_id:
+                    continue
+                for key in ("name", "shortName", "tla"):
+                    value = team.get(key) or ""
+                    norm = _normalize_name(value)
+                    if norm:
+                        _TEAM_ID_MAP[norm] = int(team_id)
+    except Exception:
+        return _TEAM_ID_MAP
+    return _TEAM_ID_MAP
+
+
+def _compute_form_from_matches(matches: list[dict], team_id: int, window: int = 6) -> tuple[float, float]:
+    if not matches:
+        return (0.5, 0.0)
+    matches_sorted = sorted(matches, key=lambda m: m.get("utcDate", ""), reverse=True)[:window]
+    pts_sum = 0.0
+    gd_sum = 0.0
+    weight_sum = 0.0
+    for idx, match in enumerate(matches_sorted):
+        weight = math.exp(-idx / 3.0)
+        score = match.get("score", {}).get("fullTime", {})
+        home_score = score.get("home")
+        away_score = score.get("away")
+        if home_score is None or away_score is None:
+            continue
+        home_id = int(match.get("homeTeam", {}).get("id", -1))
+        away_id = int(match.get("awayTeam", {}).get("id", -1))
+        if home_score == away_score:
+            pts = 1
+        else:
+            winner_home = home_score > away_score
+            if team_id == home_id:
+                pts = 3 if winner_home else 0
+            elif team_id == away_id:
+                pts = 3 if not winner_home else 0
+            else:
+                pts = 0
+        if team_id == home_id:
+            gd = home_score - away_score
+        elif team_id == away_id:
+            gd = away_score - home_score
+        else:
+            gd = 0
+        pts_sum += weight * pts
+        gd_sum += weight * gd
+        weight_sum += weight
+    if weight_sum <= 0:
+        return (0.5, 0.0)
+    ppg = pts_sum / weight_sum
+    return (ppg / 3.0, gd_sum / weight_sum)
+
+
+def _team_form(team_name: str, fallback: dict[str, float]) -> float:
+    norm = _normalize_name(team_name)
+    team_id = _team_id_map().get(norm)
+    if not team_id:
+        return fallback.get(team_name, 0.5)
+    if team_id in _FORM_CACHE:
+        return _FORM_CACHE[team_id][0]
+    try:
+        headers = {"X-Auth-Token": config.football_data_token}
+        response = requests.get(
+            f"https://api.football-data.org/v4/teams/{team_id}/matches",
+            headers=headers,
+            params={"status": "FINISHED", "limit": "6"},
+            timeout=15,
+        )
+        if response.status_code != 200:
+            return fallback.get(team_name, 0.5)
+        matches = response.json().get("matches", [])
+        ppg_norm, gd = _compute_form_from_matches(matches, team_id)
+        _FORM_CACHE[team_id] = (ppg_norm, gd)
+        return ppg_norm
+    except Exception:
+        return fallback.get(team_name, 0.5)
+
+
+def _fetch_clubelo(team_name: str) -> float:
+    norm = team_name.replace(" FC", "").replace("AFC ", "").strip().replace(" ", "_")
+    if norm in _ELO_CACHE:
+        return _ELO_CACHE[norm]
+    try:
+        response = requests.get(f"http://api.clubelo.com/{norm}", timeout=15)
+        if response.status_code != 200:
+            return 1500.0
+        lines = [ln.strip() for ln in response.text.splitlines() if ln.strip() and not ln.lower().startswith("date")]
+        if not lines:
+            return 1500.0
+        last = lines[-1]
+        parts = [p.strip() for p in last.split(",")]
+        for part in parts[::-1]:
+            try:
+                value = float(part)
+                if 800 <= value <= 2600:
+                    _ELO_CACHE[norm] = value
+                    return value
+            except Exception:
+                continue
+    except Exception:
+        return 1500.0
+    return 1500.0
+
+
+def _model_probs(elo_diff: float, form_diff: float) -> tuple[float, float, float]:
+    elo_norm = max(-1.0, min(1.0, elo_diff))
+    form_norm = max(-1.0, min(1.0, form_diff))
+    z = 0.7 * elo_norm + 0.3 * form_norm
+    p_home = 1 / (1 + math.exp(-2.0 * z))
+    eq = 1.0 - abs(elo_norm)
+    p_draw = max(0.12, min(0.32, 0.18 + 0.12 * eq))
+    rem = 1.0 - p_draw
+    p_home = max(0.05, min(0.95, p_home))
+    p_away = rem * (1.0 - p_home)
+    p_home = rem * p_home
+    return (p_home, p_draw, p_away)
+
+
+def _injury_index(items: list[dict], team_name: str) -> float:
+    tokens = _team_tokens(team_name)
+    if not tokens:
+        return 0.0
+    negative_words = ["injury", "suspension", "ruled out", "ban", "doubt", "illness"]
+    count = 0
+    for item in items:
+        text = f"{item.get('title', '')} {item.get('summary', '')}".lower()
+        if not any(token in text for token in tokens):
+            continue
+        if any(word in text for word in negative_words):
+            count += 1
+    return min(1.0, count / 3.0)
 
 
 def _load_rivalries() -> list[tuple[str, str]]:
@@ -340,22 +506,43 @@ def _score_match(
     if not home_team or not away_team:
         return None
     implied_prob = 1 / best["price"]
-    odds_score = max(0.0, 1.0 - best["distance"] / target)
+    weather_factor = min(1.0, max(0.0, abs(_weather_factor(home_team)) * 10.0))
     news_score = _news_factor(news_items, home_team, away_team)
-    weather_score = _weather_factor(home_team)
-    stats = get_team_stats(db, home_team)
-    stats_factor = stats["win_rate"] * 0.1
-    form_score = form_scores.get(home_team, 0.0)
-    table_score = table_scores.get(home_team, 0.0)
+    injury_home = _injury_index(news_items, home_team)
+    injury_away = _injury_index(news_items, away_team)
+    elo_home = _fetch_clubelo(home_team)
+    elo_away = _fetch_clubelo(away_team)
+    elo_diff = max(-1.0, min(1.0, (elo_home - elo_away) / 400.0))
+    form_home = _team_form(home_team, form_scores)
+    form_away = _team_form(away_team, form_scores)
+    form_diff = max(-1.0, min(1.0, (form_home - form_away)))
+    outcome = best["name"]
+    if outcome == "Draw":
+        elo_strength = 0.5
+        form_strength = 0.5
+        injury_index = (injury_home + injury_away) / 2
+        p_home, p_draw, p_away = _model_probs(elo_diff, form_diff)
+        model_prob = p_draw
+    elif outcome == home_team:
+        elo_strength = (elo_diff + 1.0) / 2.0
+        form_strength = (form_diff + 1.0) / 2.0
+        injury_index = injury_home
+        p_home, p_draw, p_away = _model_probs(elo_diff, form_diff)
+        model_prob = p_home
+    else:
+        elo_strength = ((-elo_diff) + 1.0) / 2.0
+        form_strength = ((-form_diff) + 1.0) / 2.0
+        injury_index = injury_away
+        p_home, p_draw, p_away = _model_probs(elo_diff, form_diff)
+        model_prob = p_away
+    market_diff = max(0.0, model_prob - implied_prob)
     weights = _load_weights()
     total = (
-        odds_score * weights["odds_distance"]
-        + implied_prob * weights["implied_prob"]
-        + news_score * weights["news"]
-        + weather_score * weights["weather"]
-        + stats_factor * weights["stats"]
-        + form_score * weights["form"]
-        + table_score * weights["table"]
+        elo_strength * weights["elo"]
+        + form_strength * weights["form"]
+        + market_diff * weights["market"]
+        + (1.0 - injury_index) * weights["injury"]
+        + (1.0 - weather_factor) * weights["weather"]
     )
     return {
         "home_team": home_team,
@@ -364,29 +551,29 @@ def _score_match(
         "odds": best["price"],
         "distance": best["distance"],
         "score": total,
-        "odds_score": odds_score,
+        "elo_strength": elo_strength,
+        "form_strength": form_strength,
+        "market_diff": market_diff,
+        "injury_index": injury_index,
+        "weather_factor": weather_factor,
         "news_score": news_score,
-        "weather_score": weather_score,
-        "stats_factor": stats_factor,
-        "form_score": form_score,
-        "table_score": table_score,
     }
 
 
 def _match_reasons(pick: dict) -> list[str]:
     reasons = []
-    if pick.get("odds_score", 0) >= 0.85:
-        reasons.append("odds 2.00-hoz kozeli")
+    if pick.get("elo_strength", 0) >= 0.65:
+        reasons.append("eros csapateroseg")
+    if pick.get("form_strength", 0) >= 0.6:
+        reasons.append("friss forma eros")
+    if pick.get("market_diff", 0) >= 0.02:
+        reasons.append("ertek a piaci oddsban")
+    if pick.get("injury_index", 0) >= 0.4:
+        reasons.append("serules kockazat")
+    if pick.get("weather_factor", 0) >= 0.4:
+        reasons.append("kedvezotlen idojaras")
     if pick.get("news_score", 0) >= 0.05:
         reasons.append("pozitiv hirek")
-    if pick.get("stats_factor", 0) >= 0.05:
-        reasons.append("jobb forma")
-    if pick.get("form_score", 0) >= 0.6:
-        reasons.append("friss forma eros")
-    if pick.get("table_score", 0) >= 0.6:
-        reasons.append("jo tabellahely")
-    if pick.get("weather_score", 0) < 0:
-        reasons.append("eso kockazat")
     if not reasons:
         reasons.append("kiegyensulyozott jelek")
     return reasons

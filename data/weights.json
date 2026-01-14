@@ -1,9 +1,7 @@
 ﻿{
-  "odds_distance": 0.45,
-  "implied_prob": 0.2,
-  "news": 0.2,
-  "weather": 0.05,
-  "stats": 0.05,
-  "form": 0.03,
-  "table": 0.02
+  "elo": 0.50,
+  "form": 0.20,
+  "market": 0.15,
+  "injury": 0.10,
+  "weather": 0.05
 }
