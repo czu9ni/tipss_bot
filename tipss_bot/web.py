@@ -36,8 +36,8 @@ _TEAM_ID_MAP: dict[str, int] | None = None
 _FORM_CACHE: dict[int, dict[str, float]] = {}
 _FORM_CACHE_TTL_SECONDS = 3600
 _ODDS_MARKETS_DEFAULT = "h2h,totals,btts,team_totals,spreads,draw_no_bet,double_chance,alternate_totals,alternate_team_totals,alternate_spreads"
-_PICK_MIN_ODDS = float(os.environ.get("PICK_MIN_ODDS", "1.4"))
-_PICK_MAX_ODDS = float(os.environ.get("PICK_MAX_ODDS", "2.8"))
+_PICK_MIN_ODDS = float(os.environ.get("PICK_MIN_ODDS", "0"))
+_PICK_MAX_ODDS = float(os.environ.get("PICK_MAX_ODDS", "0"))
 
 
 def _strip_html(text: str) -> str:
@@ -578,7 +578,9 @@ def _score_pick(
     if not isinstance(price, (int, float)):
         return None
     price = float(price)
-    if price < _PICK_MIN_ODDS or price > _PICK_MAX_ODDS:
+    if _PICK_MIN_ODDS > 0 and price < _PICK_MIN_ODDS:
+        return None
+    if _PICK_MAX_ODDS > 0 and price > _PICK_MAX_ODDS:
         return None
     implied_prob = 1 / price
     weather_factor = min(1.0, max(0.0, abs(_weather_factor(home_team)) * 10.0))
@@ -875,7 +877,7 @@ def _fetch_recent_matches_fd(token: str, comp_code: str, limit: int = 6) -> list
                         "score": f"{home_score}-{away_score}",
                     }
                 )
-        return matches
+        return matches[:limit]
     except Exception:
         return []
 
@@ -1512,6 +1514,61 @@ TEMPLATE = """
                         <canvas id="oddsChart" width="400" height="200"></canvas>
                         {% else %}
                         <p class="text-muted text-center">Jelenleg nincs elerheto elo odds.</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-12">
+                <div class="card mb-4">
+                    <div class="card-header bg-success text-white">
+                        <h5 class="mb-0">Legjobb egyedi tipp (24h, nem rangado)</h5>
+                    </div>
+                    <div class="card-body">
+                        {% if best_pick %}
+                            <table class="table table-striped text-center">
+                                <thead>
+                                    <tr>
+                                        <th>Match</th>
+                                        <th>Piac</th>
+                                        <th>Kimenetel</th>
+                                        <th>Odds</th>
+                                        <th>Pont</th>
+                                        <th>Kockazat</th>
+                                        <th>Indok</th>
+                                        <th>Mentes</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr class="risk-{{ "green" if best_pick.score >= 0.85 else ("yellow" if best_pick.score >= 0.69 else "red") }}">
+                                        <td>{{ best_pick.home_team }} vs {{ best_pick.away_team }}</td>
+                                        <td>{{ best_pick.market_label }}</td>
+                                        <td>{{ best_pick.outcome }}</td>
+                                        <td><strong>{{ "%.2f"|format(best_pick.odds) }}</strong></td>
+                                        <td>{{ "%.2f"|format(best_pick.score) }}</td>
+                                        <td>{{ "zold" if best_pick.score >= 0.85 else ("sarga" if best_pick.score >= 0.69 else "piros") }}</td>
+                                        <td>{{ ", ".join(_match_reasons(best_pick)) }}</td>
+                                        <td>
+                                            <form method="post" action="/save_pick">
+                                                <input type="hidden" name="sport_key" value="{{ best_pick.sport_key }}">
+                                                <input type="hidden" name="commence_time" value="{{ best_pick.commence_time }}">
+                                                <input type="hidden" name="home_team" value="{{ best_pick.home_team }}">
+                                                <input type="hidden" name="away_team" value="{{ best_pick.away_team }}">
+                                                <input type="hidden" name="market_key" value="{{ best_pick.market_key }}">
+                                                <input type="hidden" name="outcome" value="{{ best_pick.outcome }}">
+                                                <input type="hidden" name="line" value="{{ best_pick.line }}">
+                                                <input type="hidden" name="odds" value="{{ best_pick.odds }}">
+                                                <input type="hidden" name="score" value="{{ best_pick.score }}">
+                                                <input type="hidden" name="risk" value="{{ "green" if best_pick.score >= 0.85 else ("yellow" if best_pick.score >= 0.69 else "red") }}">
+                                                <button class="btn btn-sm btn-outline-primary" type="submit">Mentem</button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        {% else %}
+                            <p class="text-muted text-center">Nincs elerheto tipp az Odds API 24h savban.</p>
                         {% endif %}
                     </div>
                 </div>
