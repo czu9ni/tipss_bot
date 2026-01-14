@@ -2264,6 +2264,8 @@ def dashboard():
                         fixtures.extend(_fetch_upcoming_fixtures_fd(config.football_data_token, code, window_hours))
                     if not fixtures:
                         fixtures = _fetch_upcoming_fixtures_fd_all(config.football_data_token, window_hours)
+                    if not fixtures:
+                        fixtures = _fetch_upcoming_fixtures_api_football(config.api_football_key, window_hours)
                     picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                     if not picks:
                         fallback_hours = 24
@@ -2275,6 +2277,8 @@ def dashboard():
                             fixtures.extend(_fetch_upcoming_fixtures_fd(config.football_data_token, code, fallback_hours))
                         if not fixtures:
                             fixtures = _fetch_upcoming_fixtures_fd_all(config.football_data_token, fallback_hours)
+                        if not fixtures:
+                            fixtures = _fetch_upcoming_fixtures_api_football(config.api_football_key, fallback_hours)
                         picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                         if picks:
                             odds_error = "Odds API adat nem elerheto (24 oras ablak)"
