@@ -1033,7 +1033,63 @@ def _diagnostics_fixtures(token: str, competitions: list[dict], hours: int = 24)
         fixtures.extend(_fetch_upcoming_fixtures_fd(token, code, hours))
     comps_count = len(fixtures)
     all_count = len(_fetch_upcoming_fixtures_fd_all(token, hours))
-    return {"comp_24": comps_count, "all_24": all_count}
+    api_football_count = len(_fetch_upcoming_fixtures_api_football(config.api_football_key, hours))
+    return {"comp_24": comps_count, "all_24": all_count, "api_football_24": api_football_count}
+
+
+def _fetch_upcoming_fixtures_api_football(api_key: str, hours: int = 24, limit: int = 40) -> list[dict]:
+    if not api_key:
+        return []
+    try:
+        now = datetime.now(timezone.utc)
+        date_from = now.date().isoformat()
+        days_ahead = max(1, int(math.ceil(hours / 24)))
+        date_to = (now + timedelta(days=days_ahead)).date().isoformat()
+        response = requests.get(
+            "https://v3.football.api-sports.io/fixtures",
+            headers={"x-apisports-key": api_key},
+            params={"from": date_from, "to": date_to},
+            timeout=12,
+        )
+        if response.status_code != 200:
+            return []
+        fixtures = []
+        for item in response.json().get("response", []):
+            fixture = item.get("fixture", {})
+            teams = item.get("teams", {})
+            league = item.get("league", {})
+            utc_date = fixture.get("date")
+            if not utc_date:
+                continue
+            try:
+                commence_dt = datetime.fromisoformat(utc_date.replace("Z", "+00:00"))
+            except Exception:
+                continue
+            delta = commence_dt - now
+            if delta.total_seconds() < 0 or delta.total_seconds() > hours * 3600:
+                continue
+            home = teams.get("home", {})
+            away = teams.get("away", {})
+            home_name = home.get("name")
+            away_name = away.get("name")
+            if not home_name or not away_name:
+                continue
+            comp_code = league.get("id") or league.get("name") or ""
+            fixtures.append(
+                {
+                    "id": fixture.get("id"),
+                    "sport_key": str(comp_code),
+                    "comp_code": str(comp_code),
+                    "commence_time": utc_date,
+                    "home_team": home_name,
+                    "away_team": away_name,
+                    "home_id": home.get("id"),
+                    "away_id": away.get("id"),
+                }
+            )
+        return fixtures[:limit]
+    except Exception:
+        return []
 def _fetch_upcoming_fixtures_fd_all(token: str, hours: int = 24, limit: int = 40) -> list[dict]:
     if not token:
         return []
@@ -1903,7 +1959,7 @@ def dashboard():
     best_pick = None
     best_combo = None
     cached_updated_at = None
-    diag_counts = {"comp_24": 0, "all_24": 0}
+    diag_counts = {"comp_24": 0, "all_24": 0, "api_football_24": 0}
     if refresh_requested:
         try:
             diag_counts = _diagnostics_fixtures(config.football_data_token, competitions, window_hours)
@@ -1922,6 +1978,8 @@ def dashboard():
                     fixtures.extend(_fetch_upcoming_fixtures_fd(config.football_data_token, code, window_hours))
                 if not fixtures:
                     fixtures = _fetch_upcoming_fixtures_fd_all(config.football_data_token, window_hours)
+                if not fixtures:
+                    fixtures = _fetch_upcoming_fixtures_api_football(config.api_football_key, window_hours)
                 picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                 if not picks:
                     fallback_hours = 24
@@ -1933,6 +1991,8 @@ def dashboard():
                         fixtures.extend(_fetch_upcoming_fixtures_fd(config.football_data_token, code, fallback_hours))
                     if not fixtures:
                         fixtures = _fetch_upcoming_fixtures_fd_all(config.football_data_token, fallback_hours)
+                    if not fixtures:
+                        fixtures = _fetch_upcoming_fixtures_api_football(config.api_football_key, fallback_hours)
                     picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                     if picks:
                         odds_error = "Odds API kulcs hianyzik (odds nelkuli ajanlas, 24 oras ablak)"

@@ -8,6 +8,7 @@ class AppConfig(BaseModel):
     api_key: str = Field(default="", description="API key for general API (optional)")
     odds_api_key: str = Field(default="", description="Odds API key")
     football_data_token: str = Field(..., min_length=10, description="Football Data token")
+    api_football_key: str = Field(default="", description="API-Football key")
     log_level: str = Field(default="INFO", pattern="^(DEBUG|INFO|WARNING|ERROR)$", description="Logging level")
 
 
@@ -27,6 +28,7 @@ def load_config(environ: dict[str, str] | None = None) -> AppConfig:
             api_key=env.get("SOCCER_API_KEY", ""),
             odds_api_key=env.get("ODDS_API_KEY", ""),
             football_data_token=env["FOOTBALL_DATA_TOKEN"],
+            api_football_key=env.get("API_FOOTBALL_KEY", ""),
             weather_api_key=env.get("WEATHER_API_KEY", ""),
             news_api_key=env.get("NEWS_API_KEY", ""),
             log_level=env.get("SOCCER_LOG_LEVEL", "INFO"),
