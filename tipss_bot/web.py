@@ -2,7 +2,7 @@ from flask import Flask, render_template_string, request
 from soccer_bot.config import load_config
 from soccer_bot.db import connect
 from soccer_bot.repo import Match, add_match, get_team_stats, list_matches
-from soccer_bot.scoring import table
+from soccer_bot.scoring import match_points, table
 import html
 import json
 import os
@@ -79,11 +79,13 @@ def _load_weights() -> dict[str, float]:
     if _WEIGHTS_CACHE is not None:
         return _WEIGHTS_CACHE
     defaults = {
-        "odds_distance": 0.5,
+        "odds_distance": 0.45,
         "implied_prob": 0.2,
         "news": 0.2,
         "weather": 0.05,
         "stats": 0.05,
+        "form": 0.03,
+        "table": 0.02,
     }
     path = os.path.join("data", "weights.json")
     if os.path.exists(path):
@@ -322,7 +324,12 @@ def _weather_factor(home_team: str) -> float:
 
 
 def _score_match(
-    match: dict, target: float, news_items: list[dict], db
+    match: dict,
+    target: float,
+    news_items: list[dict],
+    db,
+    form_scores: dict[str, float],
+    table_scores: dict[str, float],
 ) -> dict | None:
     outcomes = _extract_h2h_outcomes(match)
     best = _best_outcome(outcomes, target)
@@ -338,6 +345,8 @@ def _score_match(
     weather_score = _weather_factor(home_team)
     stats = get_team_stats(db, home_team)
     stats_factor = stats["win_rate"] * 0.1
+    form_score = form_scores.get(home_team, 0.0)
+    table_score = table_scores.get(home_team, 0.0)
     weights = _load_weights()
     total = (
         odds_score * weights["odds_distance"]
@@ -345,6 +354,8 @@ def _score_match(
         + news_score * weights["news"]
         + weather_score * weights["weather"]
         + stats_factor * weights["stats"]
+        + form_score * weights["form"]
+        + table_score * weights["table"]
     )
     return {
         "home_team": home_team,
@@ -357,6 +368,8 @@ def _score_match(
         "news_score": news_score,
         "weather_score": weather_score,
         "stats_factor": stats_factor,
+        "form_score": form_score,
+        "table_score": table_score,
     }
 
 
@@ -368,11 +381,38 @@ def _match_reasons(pick: dict) -> list[str]:
         reasons.append("pozitiv hirek")
     if pick.get("stats_factor", 0) >= 0.05:
         reasons.append("jobb forma")
+    if pick.get("form_score", 0) >= 0.6:
+        reasons.append("friss forma eros")
+    if pick.get("table_score", 0) >= 0.6:
+        reasons.append("jo tabellahely")
     if pick.get("weather_score", 0) < 0:
         reasons.append("eso kockazat")
     if not reasons:
         reasons.append("kiegyensulyozott jelek")
     return reasons
+
+
+def _build_form_scores(matches: list[Match], window: int = 5) -> dict[str, float]:
+    recent: dict[str, list[int]] = {}
+    for match in reversed(matches):
+        points = match_points(match)
+        for team, score in points.items():
+            if team not in recent:
+                recent[team] = []
+            if len(recent[team]) < window:
+                recent[team].append(score)
+    form_scores: dict[str, float] = {}
+    max_points = 3 * window
+    for team, scores in recent.items():
+        form_scores[team] = sum(scores) / max_points if max_points else 0.0
+    return form_scores
+
+
+def _build_table_scores(points_table: dict[str, int]) -> dict[str, float]:
+    if not points_table:
+        return {}
+    max_points = max(points_table.values()) or 1
+    return {team: points / max_points for team, points in points_table.items()}
 
 
 def _combine_score(pick_a: dict, pick_b: dict, target: float) -> tuple[float, float]:
@@ -438,11 +478,17 @@ def _best_outcome(outcomes: list[dict], target: float) -> dict | None:
 
 
 def _select_matches_near_odds(
-    matches: list[dict], target: float, news_items: list[dict], db, limit: int = 2
+    matches: list[dict],
+    target: float,
+    news_items: list[dict],
+    db,
+    form_scores: dict[str, float],
+    table_scores: dict[str, float],
+    limit: int = 2,
 ) -> list[dict]:
     candidates = []
     for match in matches:
-        scored = _score_match(match, target, news_items, db)
+        scored = _score_match(match, target, news_items, db, form_scores, table_scores)
         if scored:
             candidates.append(scored)
     candidates.sort(key=lambda item: (item["distance"], -item["score"]))
@@ -793,7 +839,10 @@ def dashboard():
             except Exception:
                 pass  # Already exists
         matches = list_matches(db)
-    points_table = sorted(table(matches).items(), key=lambda x: x[1], reverse=True)
+    points_map = table(matches)
+    points_table = sorted(points_map.items(), key=lambda x: x[1], reverse=True)
+    form_scores = _build_form_scores(matches)
+    table_scores = _build_table_scores(points_map)
 
     # Fetch competitions
     competitions = []
@@ -830,11 +879,11 @@ def dashboard():
             rss_items = _fetch_rss_items()
             scored_candidates = []
             for match in eligible:
-                scored = _score_match(match, target_odds, rss_items, db)
+                scored = _score_match(match, target_odds, rss_items, db, form_scores, table_scores)
                 if scored:
                     scored_candidates.append((scored["score"], match))
             picks = [
-                _score_match(match, target_odds, rss_items, db)
+                _score_match(match, target_odds, rss_items, db, form_scores, table_scores)
                 for match in eligible
             ]
             picks = [pick for pick in picks if pick]
@@ -842,7 +891,7 @@ def dashboard():
                 best_combo = _build_best_combo(picks, target_odds)
             if scored_candidates:
                 best_match = max(scored_candidates, key=lambda item: item[0])[1]
-                best_pick = _score_match(best_match, target_odds, rss_items, db)
+                best_pick = _score_match(best_match, target_odds, rss_items, db, form_scores, table_scores)
                 match = best_match
             else:
                 match = eligible[0]
@@ -851,7 +900,7 @@ def dashboard():
             outcomes = _extract_h2h_outcomes(match)
             home_odds = _find_price(outcomes, home_team)
             away_odds = _find_price(outcomes, away_team)
-            draw_odds = _find_price(outcomes, "Donto")
+            draw_odds = _find_price(outcomes, "Draw")
             if home_odds is not None and away_odds is not None and draw_odds is not None:
                 # Enhanced AI tip with stats, weather and news factors
                 home_stats = get_team_stats(db, home_team)
@@ -875,21 +924,21 @@ def dashboard():
 
                 if home_final > away_final and home_final > draw_final:
                     tip = (
-                        "Hazai win (AI: prob "
+                        "Hazai gyozelem (AI: valoszinuseg "
                         f"{home_prob:.2f}, stats {stats_factor:.2f}, "
-                        f"weather {weather_factor:.2f}, news {news_factor:.2f})"
+                        f"idojaras {weather_factor:.2f}, hirek {news_factor:.2f})"
                     )
                 elif away_final > home_final and away_final > draw_final:
                     tip = (
-                        "Vendeg win (AI: prob "
+                        "Vendeg gyozelem (AI: valoszinuseg "
                         f"{away_prob:.2f}, stats {stats_factor:.2f}, "
-                        f"weather {weather_factor:.2f}, news {news_factor:.2f})"
+                        f"idojaras {weather_factor:.2f}, hirek {news_factor:.2f})"
                     )
                 else:
                     tip = (
-                        "Donto (AI: prob "
+                        "Donto (AI: valoszinuseg "
                         f"{draw_prob:.2f}, stats {stats_factor:.2f}, "
-                        f"weather {weather_factor:.2f}, news {news_factor:.2f})"
+                        f"idojaras {weather_factor:.2f}, hirek {news_factor:.2f})"
                     )
                 odds_data = {
                     "home_team": home_team,
@@ -905,7 +954,7 @@ def dashboard():
 
             if tips_requested:
                 target_matches = _select_matches_near_odds(
-                    eligible, target_odds, rss_items, db, limit=2
+                    eligible, target_odds, rss_items, db, form_scores, table_scores, limit=2
                 )
     except Exception:
         pass

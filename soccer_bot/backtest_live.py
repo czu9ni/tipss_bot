@@ -29,11 +29,13 @@ class Pick:
 
 def _load_weights() -> dict[str, float]:
     defaults = {
-        "odds_distance": 0.5,
+        "odds_distance": 0.45,
         "implied_prob": 0.2,
         "news": 0.2,
         "weather": 0.05,
         "stats": 0.05,
+        "form": 0.03,
+        "table": 0.02,
     }
     path = os.path.join("data", "weights.json")
     if os.path.exists(path):
