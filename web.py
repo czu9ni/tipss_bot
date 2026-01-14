@@ -9,6 +9,7 @@ import os
 import re
 import time
 from datetime import datetime, timezone
+import math
 import requests
 
 app = Flask(__name__)
@@ -32,8 +33,11 @@ _SPORTS_CACHE: dict[str, object] = {"fetched_at": 0.0, "keys": []}
 SPORTS_CACHE_TTL_SECONDS = 3600
 _ELO_CACHE: dict[str, float] = {}
 _TEAM_ID_MAP: dict[str, int] | None = None
-_FORM_CACHE: dict[int, tuple[float, float]] = {}
+_FORM_CACHE: dict[int, dict[str, float]] = {}
 _FORM_CACHE_TTL_SECONDS = 3600
+_ODDS_MARKETS_DEFAULT = "h2h,totals,btts,team_totals,spreads,draw_no_bet,double_chance,alternate_totals,alternate_team_totals,alternate_spreads"
+_PICK_MIN_ODDS = float(os.environ.get("PICK_MIN_ODDS", "1.4"))
+_PICK_MAX_ODDS = float(os.environ.get("PICK_MAX_ODDS", "2.8"))
 
 
 def _strip_html(text: str) -> str:
@@ -150,12 +154,23 @@ def _team_id_map() -> dict[str, int]:
     return _TEAM_ID_MAP
 
 
-def _compute_form_from_matches(matches: list[dict], team_id: int, window: int = 6) -> tuple[float, float]:
+def _compute_form_from_matches(matches: list[dict], team_id: int, window: int = 6) -> dict[str, float]:
     if not matches:
-        return (0.5, 0.0)
+        return {
+            "ppg_norm": 0.5,
+            "gd_avg": 0.0,
+            "gf_avg": 1.2,
+            "ga_avg": 1.2,
+            "over25_rate": 0.5,
+            "btts_rate": 0.5,
+        }
     matches_sorted = sorted(matches, key=lambda m: m.get("utcDate", ""), reverse=True)[:window]
     pts_sum = 0.0
     gd_sum = 0.0
+    gf_sum = 0.0
+    ga_sum = 0.0
+    over_sum = 0.0
+    btts_sum = 0.0
     weight_sum = 0.0
     for idx, match in enumerate(matches_sorted):
         weight = math.exp(-idx / 3.0)
@@ -177,27 +192,60 @@ def _compute_form_from_matches(matches: list[dict], team_id: int, window: int = 
             else:
                 pts = 0
         if team_id == home_id:
-            gd = home_score - away_score
+            gf = home_score
+            ga = away_score
         elif team_id == away_id:
-            gd = away_score - home_score
+            gf = away_score
+            ga = home_score
         else:
-            gd = 0
+            gf = 0
+            ga = 0
+        gd = gf - ga
+        total_goals = home_score + away_score
         pts_sum += weight * pts
         gd_sum += weight * gd
+        gf_sum += weight * gf
+        ga_sum += weight * ga
+        over_sum += weight * (1.0 if total_goals >= 3 else 0.0)
+        btts_sum += weight * (1.0 if home_score > 0 and away_score > 0 else 0.0)
         weight_sum += weight
     if weight_sum <= 0:
-        return (0.5, 0.0)
+        return {
+            "ppg_norm": 0.5,
+            "gd_avg": 0.0,
+            "gf_avg": 1.2,
+            "ga_avg": 1.2,
+            "over25_rate": 0.5,
+            "btts_rate": 0.5,
+        }
     ppg = pts_sum / weight_sum
-    return (ppg / 3.0, gd_sum / weight_sum)
+    return {
+        "ppg_norm": ppg / 3.0,
+        "gd_avg": gd_sum / weight_sum,
+        "gf_avg": gf_sum / weight_sum,
+        "ga_avg": ga_sum / weight_sum,
+        "over25_rate": over_sum / weight_sum,
+        "btts_rate": btts_sum / weight_sum,
+    }
 
 
-def _team_form(team_name: str, fallback: dict[str, float]) -> float:
+def _team_form_stats(team_name: str, fallback: dict[str, float]) -> dict[str, float]:
     norm = _normalize_name(team_name)
     team_id = _team_id_map().get(norm)
+    fallback_ppg = fallback.get(team_name, 0.5)
     if not team_id:
-        return fallback.get(team_name, 0.5)
+        return {
+            "ppg_norm": fallback_ppg,
+            "gd_avg": 0.0,
+            "gf_avg": 1.2,
+            "ga_avg": 1.2,
+            "over25_rate": 0.5,
+            "btts_rate": 0.5,
+        }
     if team_id in _FORM_CACHE:
-        return _FORM_CACHE[team_id][0]
+        stats = _FORM_CACHE[team_id]
+        stats["ppg_norm"] = stats.get("ppg_norm", fallback_ppg)
+        return stats
     try:
         headers = {"X-Auth-Token": config.football_data_token}
         response = requests.get(
@@ -207,13 +255,31 @@ def _team_form(team_name: str, fallback: dict[str, float]) -> float:
             timeout=15,
         )
         if response.status_code != 200:
-            return fallback.get(team_name, 0.5)
+            return {
+                "ppg_norm": fallback_ppg,
+                "gd_avg": 0.0,
+                "gf_avg": 1.2,
+                "ga_avg": 1.2,
+                "over25_rate": 0.5,
+                "btts_rate": 0.5,
+            }
         matches = response.json().get("matches", [])
-        ppg_norm, gd = _compute_form_from_matches(matches, team_id)
-        _FORM_CACHE[team_id] = (ppg_norm, gd)
-        return ppg_norm
+        stats = _compute_form_from_matches(matches, team_id)
+        _FORM_CACHE[team_id] = stats
+        return stats
     except Exception:
-        return fallback.get(team_name, 0.5)
+        return {
+            "ppg_norm": fallback_ppg,
+            "gd_avg": 0.0,
+            "gf_avg": 1.2,
+            "ga_avg": 1.2,
+            "over25_rate": 0.5,
+            "btts_rate": 0.5,
+        }
+
+
+def _team_form(team_name: str, fallback: dict[str, float]) -> float:
+    return _team_form_stats(team_name, fallback).get("ppg_norm", 0.5)
 
 
 def _fetch_clubelo(team_name: str) -> float:
@@ -494,23 +560,27 @@ def _weather_factor(home_team: str) -> float:
     return 0.0
 
 
-def _score_match(
+def _score_pick(
     match: dict,
+    market_key: str,
+    outcome: dict,
     target: float,
     news_items: list[dict],
     db,
     form_scores: dict[str, float],
     table_scores: dict[str, float],
 ) -> dict | None:
-    outcomes = _extract_h2h_outcomes(match)
-    best = _best_outcome(outcomes, target)
-    if not best:
-        return None
     home_team = match.get("home_team", "")
     away_team = match.get("away_team", "")
     if not home_team or not away_team:
         return None
-    implied_prob = 1 / best["price"]
+    price = outcome.get("price")
+    if not isinstance(price, (int, float)):
+        return None
+    price = float(price)
+    if price < _PICK_MIN_ODDS or price > _PICK_MAX_ODDS:
+        return None
+    implied_prob = 1 / price
     weather_factor = min(1.0, max(0.0, abs(_weather_factor(home_team)) * 10.0))
     news_score = _news_factor(news_items, home_team, away_team)
     injury_home = _injury_index(news_items, home_team)
@@ -518,28 +588,168 @@ def _score_match(
     elo_home = _fetch_clubelo(home_team)
     elo_away = _fetch_clubelo(away_team)
     elo_diff = max(-1.0, min(1.0, (elo_home - elo_away) / 400.0))
-    form_home = _team_form(home_team, form_scores)
-    form_away = _team_form(away_team, form_scores)
+    home_stats = _team_form_stats(home_team, form_scores)
+    away_stats = _team_form_stats(away_team, form_scores)
+    form_home = home_stats.get("ppg_norm", 0.5)
+    form_away = away_stats.get("ppg_norm", 0.5)
     form_diff = max(-1.0, min(1.0, (form_home - form_away)))
-    outcome = best["name"]
-    if outcome == "Draw":
-        elo_strength = 0.5
-        form_strength = 0.5
-        injury_index = (injury_home + injury_away) / 2
+    table_home = table_scores.get(home_team, 0.5)
+    table_away = table_scores.get(away_team, 0.5)
+    table_diff = max(-1.0, min(1.0, table_home - table_away))
+    exp_home, exp_away, exp_total = _expected_goals(home_stats, away_stats)
+
+    outcome_name = str(outcome.get("name") or "")
+    point_val = outcome.get("point")
+    point = float(point_val) if isinstance(point_val, (int, float)) else None
+    description = str(outcome.get("description") or "")
+
+    model_prob = 0.0
+    selection_label = outcome_name
+    elo_strength = 0.5
+    form_strength = 0.5
+    table_strength = 0.5
+    injury_index = (injury_home + injury_away) / 2.0
+
+    if market_key == "h2h":
         p_home, p_draw, p_away = _model_probs(elo_diff, form_diff)
-        model_prob = p_draw
-    elif outcome == home_team:
-        elo_strength = (elo_diff + 1.0) / 2.0
-        form_strength = (form_diff + 1.0) / 2.0
-        injury_index = injury_home
+        if outcome_name == "Draw":
+            model_prob = p_draw
+            selection_label = "Donto"
+            table_strength = 0.5
+        elif outcome_name == home_team:
+            model_prob = p_home
+            selection_label = "Hazai gyozelem"
+            elo_strength = (elo_diff + 1.0) / 2.0
+            form_strength = (form_diff + 1.0) / 2.0
+            table_strength = (table_diff + 1.0) / 2.0
+            injury_index = injury_home
+        elif outcome_name == away_team:
+            model_prob = p_away
+            selection_label = "Vendeg gyozelem"
+            elo_strength = ((-elo_diff) + 1.0) / 2.0
+            form_strength = ((-form_diff) + 1.0) / 2.0
+            table_strength = ((-table_diff) + 1.0) / 2.0
+            injury_index = injury_away
+        else:
+            return None
+    elif market_key == "double_chance":
         p_home, p_draw, p_away = _model_probs(elo_diff, form_diff)
-        model_prob = p_home
+        lowered = outcome_name.lower()
+        if lowered in {"1x", "1-x", "home or draw"} or ("draw" in lowered and home_team.lower() in lowered):
+            model_prob = p_home + p_draw
+            selection_label = "1X"
+            table_strength = (table_diff + 1.0) / 2.0
+            injury_index = injury_home
+        elif lowered in {"x2", "x-2", "draw or away"} or ("draw" in lowered and away_team.lower() in lowered):
+            model_prob = p_away + p_draw
+            selection_label = "X2"
+            table_strength = ((-table_diff) + 1.0) / 2.0
+            injury_index = injury_away
+        elif lowered in {"12", "1-2", "home or away"} or (home_team.lower() in lowered and away_team.lower() in lowered):
+            model_prob = p_home + p_away
+            selection_label = "12"
+            table_strength = 0.5
+        else:
+            return None
+        form_strength = model_prob
+    elif market_key == "draw_no_bet":
+        p_home, _, p_away = _model_probs(elo_diff, form_diff)
+        denom = max(0.01, p_home + p_away)
+        if outcome_name == home_team:
+            model_prob = p_home / denom
+            selection_label = "Hazai DNB"
+            elo_strength = (elo_diff + 1.0) / 2.0
+            form_strength = (form_diff + 1.0) / 2.0
+            table_strength = (table_diff + 1.0) / 2.0
+            injury_index = injury_home
+        elif outcome_name == away_team:
+            model_prob = p_away / denom
+            selection_label = "Vendeg DNB"
+            elo_strength = ((-elo_diff) + 1.0) / 2.0
+            form_strength = ((-form_diff) + 1.0) / 2.0
+            table_strength = ((-table_diff) + 1.0) / 2.0
+            injury_index = injury_away
+        else:
+            return None
+    elif market_key in {"totals", "alternate_totals"}:
+        if point is None:
+            return None
+        floor_line = int(math.floor(point))
+        if outcome_name.lower() == "over":
+            model_prob = 1.0 - _poisson_cdf(exp_total, floor_line)
+            selection_label = f"Over {point:.1f}"
+        elif outcome_name.lower() == "under":
+            model_prob = _poisson_cdf(exp_total, floor_line)
+            selection_label = f"Under {point:.1f}"
+        else:
+            return None
+        form_strength = model_prob
+        table_strength = 0.5
+    elif market_key in {"team_totals", "alternate_team_totals"}:
+        if point is None:
+            return None
+        team_name = description or outcome_name
+        team_norm = _normalize_team_name(team_name)
+        home_norm = _normalize_team_name(home_team)
+        away_norm = _normalize_team_name(away_team)
+        if team_norm in home_norm:
+            team_lambda = exp_home
+            selection_label_prefix = "Hazai golok"
+        elif team_norm in away_norm:
+            team_lambda = exp_away
+            selection_label_prefix = "Vendeg golok"
+        else:
+            return None
+        floor_line = int(math.floor(point))
+        if outcome_name.lower() == "over":
+            model_prob = 1.0 - _poisson_cdf(team_lambda, floor_line)
+            selection_label = f"{selection_label_prefix} Over {point:.1f}"
+        elif outcome_name.lower() == "under":
+            model_prob = _poisson_cdf(team_lambda, floor_line)
+            selection_label = f"{selection_label_prefix} Under {point:.1f}"
+        else:
+            return None
+        form_strength = model_prob
+        table_strength = 0.5
+    elif market_key == "btts":
+        p_yes = (1.0 - math.exp(-exp_home)) * (1.0 - math.exp(-exp_away))
+        if outcome_name.lower() == "yes":
+            model_prob = p_yes
+            selection_label = "GG - Igen"
+        elif outcome_name.lower() == "no":
+            model_prob = 1.0 - p_yes
+            selection_label = "GG - Nem"
+        else:
+            return None
+        form_strength = model_prob
+        table_strength = 0.5
+    elif market_key in {"spreads", "alternate_spreads"}:
+        if point is None:
+            return None
+        mean = exp_home - exp_away
+        sigma = 1.25
+        if outcome_name == home_team or outcome_name.lower() == "home":
+            threshold = -point
+            model_prob = 1.0 - _normal_cdf(threshold, mean, sigma)
+            selection_label = f"Hazai {point:+.1f}"
+            elo_strength = (elo_diff + 1.0) / 2.0
+            form_strength = (form_diff + 1.0) / 2.0
+            table_strength = (table_diff + 1.0) / 2.0
+            injury_index = injury_home
+        elif outcome_name == away_team or outcome_name.lower() == "away":
+            threshold = point
+            model_prob = _normal_cdf(threshold, mean, sigma)
+            selection_label = f"Vendeg {point:+.1f}"
+            elo_strength = ((-elo_diff) + 1.0) / 2.0
+            form_strength = ((-form_diff) + 1.0) / 2.0
+            table_strength = ((-table_diff) + 1.0) / 2.0
+            injury_index = injury_away
+        else:
+            return None
     else:
-        elo_strength = ((-elo_diff) + 1.0) / 2.0
-        form_strength = ((-form_diff) + 1.0) / 2.0
-        injury_index = injury_away
-        p_home, p_draw, p_away = _model_probs(elo_diff, form_diff)
-        model_prob = p_away
+        return None
+
+    form_strength = 0.7 * form_strength + 0.3 * table_strength
     market_diff = max(0.0, model_prob - implied_prob)
     weights = _load_weights()
     total = (
@@ -550,11 +760,14 @@ def _score_match(
         + (1.0 - weather_factor) * weights["weather"]
     )
     return {
+        "match_key": _match_key(match),
         "home_team": home_team,
         "away_team": away_team,
-        "outcome": best["name"],
-        "odds": best["price"],
-        "distance": best["distance"],
+        "market_key": market_key,
+        "market_label": _market_label(market_key),
+        "outcome": selection_label,
+        "odds": price,
+        "distance": abs(price - target),
         "score": total,
         "elo_strength": elo_strength,
         "form_strength": form_strength,
@@ -562,17 +775,35 @@ def _score_match(
         "injury_index": injury_index,
         "weather_factor": weather_factor,
         "news_score": news_score,
+        "model_prob": model_prob,
+        "implied_prob": implied_prob,
     }
 
 
 def _match_reasons(pick: dict) -> list[str]:
     reasons = []
+    market_key = pick.get("market_key", "")
     if pick.get("elo_strength", 0) >= 0.65:
         reasons.append("eros csapateroseg")
     if pick.get("form_strength", 0) >= 0.6:
         reasons.append("friss forma eros")
     if pick.get("market_diff", 0) >= 0.02:
         reasons.append("ertek a piaci oddsban")
+    if market_key in {"totals", "alternate_totals"}:
+        if str(pick.get("outcome", "")).lower().startswith("over"):
+            reasons.append("varhato golszam magas")
+        if str(pick.get("outcome", "")).lower().startswith("under"):
+            reasons.append("varhato golszam alacsony")
+    if market_key in {"team_totals", "alternate_team_totals"}:
+        reasons.append("csapatgolos minta")
+    if market_key == "btts":
+        reasons.append("gg tendencia")
+    if market_key == "double_chance":
+        reasons.append("biztonsagosabb piac")
+    if market_key == "draw_no_bet":
+        reasons.append("donto nelkul opcio")
+    if market_key in {"spreads", "alternate_spreads"}:
+        reasons.append("hendikep irany")
     if pick.get("injury_index", 0) >= 0.4:
         reasons.append("serules kockazat")
     if pick.get("weather_factor", 0) >= 0.4:
@@ -582,6 +813,26 @@ def _match_reasons(pick: dict) -> list[str]:
     if not reasons:
         reasons.append("kiegyensulyozott jelek")
     return reasons
+
+
+def _build_picks_for_match(
+    match: dict,
+    target: float,
+    news_items: list[dict],
+    db,
+    form_scores: dict[str, float],
+    table_scores: dict[str, float],
+) -> list[dict]:
+    picks: list[dict] = []
+    for market_key in _market_keys():
+        outcomes = _average_market_outcomes(match, market_key)
+        if not outcomes:
+            continue
+        for outcome in outcomes:
+            scored = _score_pick(match, market_key, outcome, target, news_items, db, form_scores, table_scores)
+            if scored:
+                picks.append(scored)
+    return picks
 
 
 def _build_form_scores(matches: list[Match], window: int = 5) -> dict[str, float]:
@@ -628,6 +879,8 @@ def _build_best_combo(picks: list[dict], target: float) -> dict | None:
     best = None
     for i in range(len(picks)):
         for j in range(i + 1, len(picks)):
+            if picks[i].get("match_key") == picks[j].get("match_key"):
+                continue
             score, combined_odds = _combine_score(picks[i], picks[j], target)
             if not (1.85 <= combined_odds <= 2.15):
                 continue
@@ -641,11 +894,7 @@ def _build_best_combo(picks: list[dict], target: float) -> dict | None:
                 best = combo
     return best
 def _extract_h2h_outcomes(match: dict) -> list[dict]:
-    for bookmaker in match.get("bookmakers", []):
-        for market in bookmaker.get("markets", []):
-            if market.get("key") == "h2h":
-                return market.get("outcomes", [])
-    return []
+    return _average_market_outcomes(match, "h2h")
 
 
 def _find_price(outcomes: list[dict], name: str) -> float | None:
@@ -669,22 +918,107 @@ def _best_outcome(outcomes: list[dict], target: float) -> dict | None:
     return best
 
 
-def _select_matches_near_odds(
-    matches: list[dict],
-    target: float,
-    news_items: list[dict],
-    db,
-    form_scores: dict[str, float],
-    table_scores: dict[str, float],
-    limit: int = 2,
-) -> list[dict]:
-    candidates = []
-    for match in matches:
-        scored = _score_match(match, target, news_items, db, form_scores, table_scores)
-        if scored:
-            candidates.append(scored)
+def _market_keys() -> list[str]:
+    raw = os.environ.get("ODDS_MARKETS", _ODDS_MARKETS_DEFAULT)
+    return [key.strip() for key in raw.split(",") if key.strip()]
+
+
+def _average_market_outcomes(match: dict, market_key: str) -> list[dict]:
+    buckets: dict[tuple[str, float | None, str], list[float]] = {}
+    for bookmaker in match.get("bookmakers", []):
+        for market in bookmaker.get("markets", []):
+            if market.get("key") != market_key:
+                continue
+            for outcome in market.get("outcomes", []):
+                name = str(outcome.get("name") or "")
+                point = outcome.get("point")
+                point_val = float(point) if isinstance(point, (int, float)) else None
+                desc = str(outcome.get("description") or "")
+                price = outcome.get("price")
+                if not isinstance(price, (int, float)):
+                    continue
+                key = (name, point_val, desc)
+                buckets.setdefault(key, []).append(float(price))
+    results: list[dict] = []
+    for (name, point, desc), prices in buckets.items():
+        if not prices:
+            continue
+        results.append(
+            {
+                "name": name,
+                "point": point,
+                "description": desc,
+                "price": sum(prices) / len(prices),
+            }
+        )
+    return results
+
+
+def _poisson_prob(lmbd: float, k: int) -> float:
+    return math.exp(-lmbd) * (lmbd**k) / math.factorial(k)
+
+
+def _poisson_cdf(lmbd: float, k: int) -> float:
+    return sum(_poisson_prob(lmbd, i) for i in range(0, k + 1))
+
+
+def _normal_cdf(x: float, mean: float, sigma: float) -> float:
+    if sigma <= 0:
+        return 0.5
+    z = (x - mean) / (sigma * math.sqrt(2.0))
+    return 0.5 * (1 + math.erf(z))
+
+
+def _expected_goals(home_stats: dict[str, float], away_stats: dict[str, float]) -> tuple[float, float, float]:
+    home_attack = home_stats.get("gf_avg", 1.2)
+    home_def = home_stats.get("ga_avg", 1.2)
+    away_attack = away_stats.get("gf_avg", 1.2)
+    away_def = away_stats.get("ga_avg", 1.2)
+    exp_home = max(0.2, (home_attack + away_def) / 2.0)
+    exp_away = max(0.2, (away_attack + home_def) / 2.0)
+    return exp_home, exp_away, exp_home + exp_away
+
+
+def _market_label(market_key: str) -> str:
+    labels = {
+        "h2h": "1X2 (vegeredmeny)",
+        "double_chance": "Dupla esely",
+        "draw_no_bet": "Donto nelkul",
+        "totals": "Osszes gol",
+        "alternate_totals": "Osszes gol (alternativ)",
+        "team_totals": "Csapatgolok",
+        "alternate_team_totals": "Csapatgolok (alternativ)",
+        "btts": "Mindket csapat golt szerez",
+        "spreads": "Hendikep",
+        "alternate_spreads": "Hendikep (alternativ)",
+    }
+    return labels.get(market_key, market_key)
+
+
+def _match_key(match: dict) -> str:
+    match_id = match.get("id")
+    if match_id:
+        return str(match_id)
+    home_team = match.get("home_team", "")
+    away_team = match.get("away_team", "")
+    commence = match.get("commence_time", "")
+    return f"{home_team}-{away_team}-{commence}"
+
+
+def _select_picks_near_odds(picks: list[dict], target: float, limit: int = 2) -> list[dict]:
+    candidates = [pick for pick in picks if abs(pick.get("odds", 0.0) - target) <= 0.15]
     candidates.sort(key=lambda item: (item["distance"], -item["score"]))
-    return candidates[:limit]
+    selected: list[dict] = []
+    used_matches: set[str] = set()
+    for pick in candidates:
+        match_key = str(pick.get("match_key", ""))
+        if match_key in used_matches:
+            continue
+        selected.append(pick)
+        used_matches.add(match_key)
+        if len(selected) >= limit:
+            break
+    return selected
 
 
 def _fetch_sports_keys(api_key: str) -> list[str]:
@@ -719,15 +1053,24 @@ def _fetch_odds_matches(api_key: str, keys: list[str] | None = None) -> list[dic
     max_sports = int(os.environ.get("ODDS_MAX_SPORTS", "0"))
     if max_sports > 0:
         keys = keys[:max_sports]
+    markets = ",".join(_market_keys())
     for key in keys:
         try:
             response = requests.get(
                 f"https://api.the-odds-api.com/v4/sports/{key}/odds",
-                params={"apiKey": api_key, "regions": "eu", "markets": "h2h"},
+                params={"apiKey": api_key, "regions": "eu", "markets": markets},
                 timeout=10,
             )
             if response.status_code == 200:
                 matches.extend(response.json())
+            else:
+                fallback = requests.get(
+                    f"https://api.the-odds-api.com/v4/sports/{key}/odds",
+                    params={"apiKey": api_key, "regions": "eu", "markets": "h2h"},
+                    timeout=10,
+                )
+                if fallback.status_code == 200:
+                    matches.extend(fallback.json())
         except Exception:
             pass
     return matches
@@ -847,6 +1190,7 @@ TEMPLATE = """
                                 <thead>
                                     <tr>
                                         <th>Match</th>
+                                        <th>Piac</th>
                                         <th>Kimenetel</th>
                                         <th>Odds</th>
                                         <th>Pont</th>
@@ -858,6 +1202,7 @@ TEMPLATE = """
                                     {% for pick in best_combo.matches %}
                                     <tr class="risk-{{ best_combo.risk }}">
                                         <td>{{ pick.home_team }} vs {{ pick.away_team }}</td>
+                                        <td>{{ pick.market_label }}</td>
                                         <td>{{ pick.outcome }}</td>
                                         <td><strong>{{ "%.2f"|format(pick.odds) }}</strong></td>
                                         <td>{{ "%.2f"|format(pick.score) }}</td>
@@ -869,7 +1214,7 @@ TEMPLATE = """
                             </table>
                             <p class="text-muted text-center">Odds pool: {{ odds_count }} meccs (24h, nem rangado)</p>
                         {% else %}
-                            <p class="text-muted text-center">Nincs ervenyes 2-meccses kombi 2.00 ± 0.15 savban.</p>
+                            <p class="text-muted text-center">Nincs ervenyes 2-meccses kombi 2.00 +/- 0.15 savban.</p>
                         {% endif %}
                     </div>
                 </div>
@@ -893,6 +1238,7 @@ TEMPLATE = """
                                     <thead>
                                         <tr>
                                             <th>Match</th>
+                                            <th>Piac</th>
                                             <th>Kimenetel</th>
                                             <th>Odds</th>
                                             <th>Pont</th>
@@ -902,6 +1248,7 @@ TEMPLATE = """
                                         {% for match in target_matches %}
                                         <tr>
                                             <td>{{ match.home_team }} vs {{ match.away_team }}</td>
+                                            <td>{{ match.market_label }}</td>
                                             <td>{{ match.outcome }}</td>
                                             <td><strong>{{ "%.2f"|format(match.odds) }}</strong></td>
                                             <td>{{ "%.2f"|format(match.score) }}</td>
@@ -1093,85 +1440,79 @@ def dashboard():
         if eligible:
             odds_count = len(eligible)
             rss_items = _fetch_rss_items()
-            scored_candidates = []
+            picks: list[dict] = []
             for match in eligible:
-                scored = _score_match(match, target_odds, rss_items, db, form_scores, table_scores)
-                if scored:
-                    scored_candidates.append((scored["score"], match))
-            picks = [
-                _score_match(match, target_odds, rss_items, db, form_scores, table_scores)
-                for match in eligible
-            ]
-            picks = [pick for pick in picks if pick]
+                picks.extend(_build_picks_for_match(match, target_odds, rss_items, db, form_scores, table_scores))
             if picks:
                 best_combo = _build_best_combo(picks, target_odds)
-            if scored_candidates:
-                best_match = max(scored_candidates, key=lambda item: item[0])[1]
-                best_pick = _score_match(best_match, target_odds, rss_items, db, form_scores, table_scores)
-                match = best_match
-            else:
-                match = eligible[0]
-            home_team = match.get("home_team", "")
-            away_team = match.get("away_team", "")
-            outcomes = _extract_h2h_outcomes(match)
-            home_odds = _find_price(outcomes, home_team)
-            away_odds = _find_price(outcomes, away_team)
-            draw_odds = _find_price(outcomes, "Draw")
-            if home_odds is not None and away_odds is not None and draw_odds is not None:
-                # Enhanced AI tip with stats, weather and news factors
-                home_stats = get_team_stats(db, home_team)
-                away_stats = get_team_stats(db, away_team)
-                stats_factor = (home_stats["win_rate"] - away_stats["win_rate"]) * 0.2
+                best_pick = max(picks, key=lambda item: item["score"])
 
-                home_prob = 1 / home_odds
-                away_prob = 1 / away_odds
-                draw_prob = 1 / draw_odds
-                home_score = home_prob * 0.4 + (1 if home_odds < 2.5 else 0) * 0.1
-                away_score = away_prob * 0.4 + (1 if away_odds < 2.5 else 0) * 0.1
-                draw_score = draw_prob * 0.2
+            odds_match = None
+            for match in eligible:
+                outcomes = _extract_h2h_outcomes(match)
+                home_team = match.get("home_team", "")
+                away_team = match.get("away_team", "")
+                if home_team and away_team and outcomes:
+                    odds_match = match
+                    break
+            if odds_match:
+                home_team = odds_match.get("home_team", "")
+                away_team = odds_match.get("away_team", "")
+                outcomes = _extract_h2h_outcomes(odds_match)
+                home_odds = _find_price(outcomes, home_team)
+                away_odds = _find_price(outcomes, away_team)
+                draw_odds = _find_price(outcomes, "Draw")
+                if home_odds is not None and away_odds is not None and draw_odds is not None:
+                    home_stats = get_team_stats(db, home_team)
+                    away_stats = get_team_stats(db, away_team)
+                    stats_factor = (home_stats["win_rate"] - away_stats["win_rate"]) * 0.2
 
-                weather_factor = _weather_factor(home_team)
-                news_factor = _news_factor(rss_items, home_team, away_team)
+                    home_prob = 1 / home_odds
+                    away_prob = 1 / away_odds
+                    draw_prob = 1 / draw_odds
+                    home_score = home_prob * 0.4 + (1 if home_odds < 2.5 else 0) * 0.1
+                    away_score = away_prob * 0.4 + (1 if away_odds < 2.5 else 0) * 0.1
+                    draw_score = draw_prob * 0.2
 
-                # Final scores with factors
-                home_final = home_score + stats_factor + weather_factor + news_factor
-                away_final = away_score + stats_factor + weather_factor + news_factor
-                draw_final = draw_score
+                    weather_factor = _weather_factor(home_team)
+                    news_factor = _news_factor(rss_items, home_team, away_team)
 
-                if home_final > away_final and home_final > draw_final:
-                    tip = (
-                        "Hazai gyozelem (AI: valoszinuseg "
-                        f"{home_prob:.2f}, stats {stats_factor:.2f}, "
-                        f"idojaras {weather_factor:.2f}, hirek {news_factor:.2f})"
-                    )
-                elif away_final > home_final and away_final > draw_final:
-                    tip = (
-                        "Vendeg gyozelem (AI: valoszinuseg "
-                        f"{away_prob:.2f}, stats {stats_factor:.2f}, "
-                        f"idojaras {weather_factor:.2f}, hirek {news_factor:.2f})"
-                    )
-                else:
-                    tip = (
-                        "Donto (AI: valoszinuseg "
-                        f"{draw_prob:.2f}, stats {stats_factor:.2f}, "
-                        f"idojaras {weather_factor:.2f}, hirek {news_factor:.2f})"
-                    )
-                odds_data = {
-                    "home_team": home_team,
-                    "away_team": away_team,
-                    "home_odds": home_odds,
-                    "draw_odds": draw_odds,
-                    "away_odds": away_odds,
-                    "home_prob": home_prob,
-                    "draw_prob": draw_prob,
-                    "away_prob": away_prob,
-                    "tip": tip,
-                }
+                    home_final = home_score + stats_factor + weather_factor + news_factor
+                    away_final = away_score + stats_factor + weather_factor + news_factor
+                    draw_final = draw_score
 
-            if tips_requested:
-                target_matches = _select_matches_near_odds(
-                    eligible, target_odds, rss_items, db, form_scores, table_scores, limit=2
-                )
+                    if home_final > away_final and home_final > draw_final:
+                        tip = (
+                            "Hazai gyozelem (AI: valoszinuseg "
+                            f"{home_prob:.2f}, stats {stats_factor:.2f}, "
+                            f"idojaras {weather_factor:.2f}, hirek {news_factor:.2f})"
+                        )
+                    elif away_final > home_final and away_final > draw_final:
+                        tip = (
+                            "Vendeg gyozelem (AI: valoszinuseg "
+                            f"{away_prob:.2f}, stats {stats_factor:.2f}, "
+                            f"idojaras {weather_factor:.2f}, hirek {news_factor:.2f})"
+                        )
+                    else:
+                        tip = (
+                            "Donto (AI: valoszinuseg "
+                            f"{draw_prob:.2f}, stats {stats_factor:.2f}, "
+                            f"idojaras {weather_factor:.2f}, hirek {news_factor:.2f})"
+                        )
+                    odds_data = {
+                        "home_team": home_team,
+                        "away_team": away_team,
+                        "home_odds": home_odds,
+                        "draw_odds": draw_odds,
+                        "away_odds": away_odds,
+                        "home_prob": home_prob,
+                        "draw_prob": draw_prob,
+                        "away_prob": away_prob,
+                        "tip": tip,
+                    }
+
+            if tips_requested and picks:
+                target_matches = _select_picks_near_odds(picks, target_odds, limit=2)
     except Exception:
         pass
 
