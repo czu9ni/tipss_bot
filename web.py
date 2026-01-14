@@ -1851,7 +1851,7 @@ def dashboard():
                     fixtures.extend(_fetch_upcoming_fixtures_fd(config.football_data_token, code, window_hours))
                 picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                 if not picks:
-                    fallback_hours = 72
+                    fallback_hours = 168
                     fixtures = []
                     for comp in competitions:
                         code = comp.get("code")
@@ -1860,7 +1860,9 @@ def dashboard():
                         fixtures.extend(_fetch_upcoming_fixtures_fd(config.football_data_token, code, fallback_hours))
                     picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                     if picks:
-                        odds_error = "Odds API kulcs hianyzik (odds nelkuli ajanlas, 72h ablak)"
+                        odds_error = "Odds API kulcs hianyzik (odds nelkuli ajanlas, 7 napos ablak)"
+                    if not picks:
+                        odds_error = "Nincs elerheto meccs 7 napos ablakban"
                 odds_count = len(picks)
                 best_pick = _enrich_pick(picks[0]) if picks else None
                 best_combo = None
@@ -1895,7 +1897,7 @@ def dashboard():
                         fixtures.extend(_fetch_upcoming_fixtures_fd(config.football_data_token, code, window_hours))
                     picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                     if not picks:
-                        fallback_hours = 72
+                        fallback_hours = 168
                         fixtures = []
                         for comp in competitions:
                             code = comp.get("code")
@@ -1904,7 +1906,9 @@ def dashboard():
                             fixtures.extend(_fetch_upcoming_fixtures_fd(config.football_data_token, code, fallback_hours))
                         picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                         if picks:
-                            odds_error = "Odds API adat nem elerheto (72h ablak)"
+                            odds_error = "Odds API adat nem elerheto (7 napos ablak)"
+                    if not picks:
+                        odds_error = "Nincs elerheto meccs 7 napos ablakban"
                     odds_count = len(picks)
                     best_pick = _enrich_pick(picks[0]) if picks else None
                     best_combo = None
