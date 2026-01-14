@@ -1034,17 +1034,31 @@ def _diagnostics_fixtures(token: str, competitions: list[dict], hours: int = 24)
     comps_count = len(fixtures)
     all_count = len(_fetch_upcoming_fixtures_fd_all(token, hours))
     api_football_count = len(_fetch_upcoming_fixtures_api_football(config.api_football_key, hours))
-    return {"comp_24": comps_count, "all_24": all_count, "api_football_24": api_football_count}
+    _, date_from, date_to = _fixture_window(hours)
+    return {"comp_24": comps_count, "all_24": all_count, "api_football_24": api_football_count, "window_from": date_from, "window_to": date_to}
 
+
+
+
+def _fixture_window(hours: int) -> tuple[datetime, str, str]:
+    override = (os.environ.get("FIXTURES_DATE", "") or os.environ.get("SOCCER_DATE_OVERRIDE", "")).strip()
+    if override:
+        try:
+            base = datetime.fromisoformat(override).replace(tzinfo=timezone.utc)
+        except Exception:
+            base = datetime.now(timezone.utc)
+    else:
+        base = datetime.now(timezone.utc)
+    days_ahead = max(1, int(math.ceil(hours / 24)))
+    date_from = base.date().isoformat()
+    date_to = (base + timedelta(days=days_ahead)).date().isoformat()
+    return base, date_from, date_to
 
 def _fetch_upcoming_fixtures_api_football(api_key: str, hours: int = 24, limit: int = 40) -> list[dict]:
     if not api_key:
         return []
     try:
-        now = datetime.now(timezone.utc)
-        date_from = now.date().isoformat()
-        days_ahead = max(1, int(math.ceil(hours / 24)))
-        date_to = (now + timedelta(days=days_ahead)).date().isoformat()
+        now, date_from, date_to = _fixture_window(hours)
         response = requests.get(
             "https://v3.football.api-sports.io/fixtures",
             headers={"x-apisports-key": api_key},
@@ -1094,10 +1108,7 @@ def _fetch_upcoming_fixtures_fd_all(token: str, hours: int = 24, limit: int = 40
     if not token:
         return []
     try:
-        now = datetime.now(timezone.utc)
-        date_from = now.date().isoformat()
-        days_ahead = max(1, int(math.ceil(hours / 24)))
-        date_to = (now + timedelta(days=days_ahead)).date().isoformat()
+        now, date_from, date_to = _fixture_window(hours)
         response = requests.get(
             "https://api.football-data.org/v4/matches",
             headers={"X-Auth-Token": token},
@@ -1147,10 +1158,7 @@ def _fetch_upcoming_fixtures_fd(token: str, comp_code: str, hours: int = 24, lim
     if not token or not comp_code:
         return []
     try:
-        now = datetime.now(timezone.utc)
-        date_from = now.date().isoformat()
-        days_ahead = max(1, int(math.ceil(hours / 24)))
-        date_to = (now + timedelta(days=days_ahead)).date().isoformat()
+        now, date_from, date_to = _fixture_window(hours)
         response = requests.get(
             f"https://api.football-data.org/v4/competitions/{comp_code}/matches",
             headers={"X-Auth-Token": token},
@@ -1959,7 +1967,7 @@ def dashboard():
     best_pick = None
     best_combo = None
     cached_updated_at = None
-    diag_counts = {"comp_24": 0, "all_24": 0, "api_football_24": 0}
+    diag_counts = {"comp_24": 0, "all_24": 0, "api_football_24": 0, "window_from": "", "window_to": ""}
     if refresh_requested:
         try:
             diag_counts = _diagnostics_fixtures(config.football_data_token, competitions, window_hours)
