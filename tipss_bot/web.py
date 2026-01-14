@@ -10,6 +10,7 @@ import os
 import re
 import time
 from datetime import datetime, timezone, timedelta
+from email.utils import parsedate_to_datetime
 import math
 import requests
 
@@ -33,32 +34,73 @@ def _server_time_utc() -> datetime | None:
     if _SERVER_TIME_CACHE["value"] and (time.time() - _SERVER_TIME_CACHE["ts"]) < 3600:
         return _SERVER_TIME_CACHE["value"]
     key = config.api_football_key
-    if not key:
-        return None
+    if key:
+        try:
+            response = requests.get(
+                "https://v3.football.api-sports.io/status",
+                headers={"x-apisports-key": key},
+                timeout=10,
+            )
+            if response.status_code == 200:
+                data = response.json()
+                resp = data.get("response", {})
+                raw_time = resp.get("time") or resp.get("current") or resp.get("timestamp")
+                if isinstance(raw_time, (int, float)):
+                    value = datetime.fromtimestamp(raw_time, tz=timezone.utc)
+                elif isinstance(raw_time, str):
+                    value = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
+                    if value.tzinfo is None:
+                        value = value.replace(tzinfo=timezone.utc)
+                else:
+                    value = None
+                if value:
+                    _SERVER_TIME_CACHE["ts"] = time.time()
+                    _SERVER_TIME_CACHE["value"] = value
+                    return value
+        except Exception:
+            pass
+
+    token = config.football_data_token
+    if token:
+        try:
+            response = requests.get(
+                "https://api.football-data.org/v4/competitions",
+                headers={"X-Auth-Token": token},
+                timeout=10,
+            )
+            if response.status_code == 200:
+                date_header = response.headers.get("Date")
+                if date_header:
+                    value = parsedate_to_datetime(date_header)
+                    if value.tzinfo is None:
+                        value = value.replace(tzinfo=timezone.utc)
+                    value = value.astimezone(timezone.utc)
+                    _SERVER_TIME_CACHE["ts"] = time.time()
+                    _SERVER_TIME_CACHE["value"] = value
+                    return value
+        except Exception:
+            pass
+
     try:
         response = requests.get(
-            "https://v3.football.api-sports.io/status",
-            headers={"x-apisports-key": key},
+            "https://api.open-meteo.com/v1/forecast",
+            params={"latitude": 0, "longitude": 0, "current": "temperature_2m"},
             timeout=10,
         )
-        if response.status_code != 200:
-            return None
-        data = response.json()
-        resp = data.get("response", {})
-        raw_time = resp.get("time") or resp.get("current") or resp.get("timestamp")
-        if isinstance(raw_time, (int, float)):
-            value = datetime.fromtimestamp(raw_time, tz=timezone.utc)
-        elif isinstance(raw_time, str):
-            value = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
-            if value.tzinfo is None:
-                value = value.replace(tzinfo=timezone.utc)
-        else:
-            return None
-        _SERVER_TIME_CACHE["ts"] = time.time()
-        _SERVER_TIME_CACHE["value"] = value
-        return value
+        if response.status_code == 200:
+            date_header = response.headers.get("Date")
+            if date_header:
+                value = parsedate_to_datetime(date_header)
+                if value.tzinfo is None:
+                    value = value.replace(tzinfo=timezone.utc)
+                value = value.astimezone(timezone.utc)
+                _SERVER_TIME_CACHE["ts"] = time.time()
+                _SERVER_TIME_CACHE["value"] = value
+                return value
     except Exception:
-        return None
+        pass
+
+    return None
 
 
 _WEATHER_CACHE: dict[str, dict] = {}
