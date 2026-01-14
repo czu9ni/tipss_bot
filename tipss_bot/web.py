@@ -1021,6 +1021,19 @@ def _fetch_recent_matches_fd(token: str, comp_code: str, limit: int = 6) -> list
 
 
 
+
+
+def _diagnostics_fixtures(token: str, competitions: list[dict], hours: int = 24) -> dict:
+    comps_count = 0
+    fixtures = []
+    for comp in competitions:
+        code = comp.get("code")
+        if not code:
+            continue
+        fixtures.extend(_fetch_upcoming_fixtures_fd(token, code, hours))
+    comps_count = len(fixtures)
+    all_count = len(_fetch_upcoming_fixtures_fd_all(token, hours))
+    return {"comp_24": comps_count, "all_24": all_count}
 def _fetch_upcoming_fixtures_fd_all(token: str, hours: int = 24, limit: int = 40) -> list[dict]:
     if not token:
         return []
@@ -1890,8 +1903,10 @@ def dashboard():
     best_pick = None
     best_combo = None
     cached_updated_at = None
+    diag_counts = {"comp_24": 0, "all_24": 0}
     if refresh_requested:
         try:
+            diag_counts = _diagnostics_fixtures(config.football_data_token, competitions, window_hours)
             if not config.odds_api_key:
                 odds_error = "Odds API kulcs hianyzik (odds nelkuli ajanlas)"
                 data = []
@@ -1909,7 +1924,7 @@ def dashboard():
                     fixtures = _fetch_upcoming_fixtures_fd_all(config.football_data_token, window_hours)
                 picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                 if not picks:
-                    fallback_hours = 168
+                    fallback_hours = 24
                     fixtures = []
                     for comp in competitions:
                         code = comp.get("code")
@@ -1920,9 +1935,9 @@ def dashboard():
                         fixtures = _fetch_upcoming_fixtures_fd_all(config.football_data_token, fallback_hours)
                     picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                     if picks:
-                        odds_error = "Odds API kulcs hianyzik (odds nelkuli ajanlas, 7 napos ablak)"
+                        odds_error = "Odds API kulcs hianyzik (odds nelkuli ajanlas, 24 oras ablak)"
                 if not picks:
-                    odds_error = "Nincs elerheto meccs 7 napos ablakban"
+                    odds_error = "Nincs elerheto meccs 24 oras ablakban"
                 odds_count = len(picks)
                 best_pick = _enrich_pick(picks[0]) if picks else None
                 best_combo = None
@@ -1959,7 +1974,7 @@ def dashboard():
                         fixtures = _fetch_upcoming_fixtures_fd_all(config.football_data_token, window_hours)
                     picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                     if not picks:
-                        fallback_hours = 168
+                        fallback_hours = 24
                         fixtures = []
                         for comp in competitions:
                             code = comp.get("code")
@@ -1970,9 +1985,9 @@ def dashboard():
                             fixtures = _fetch_upcoming_fixtures_fd_all(config.football_data_token, fallback_hours)
                         picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                         if picks:
-                            odds_error = "Odds API adat nem elerheto (7 napos ablak)"
+                            odds_error = "Odds API adat nem elerheto (24 oras ablak)"
                     if not picks:
-                        odds_error = "Nincs elerheto meccs 7 napos ablakban"
+                        odds_error = "Nincs elerheto meccs 24 oras ablakban"
                     odds_count = len(picks)
                     best_pick = _enrich_pick(picks[0]) if picks else None
                     best_combo = None
@@ -2128,6 +2143,7 @@ def dashboard():
                                   rss_sources=rss_sources,
                                   saved_picks=saved_picks,
                                   stake_pct=stake_pct,
+                                  diag_counts=diag_counts,
                                   cached_updated_at=cached_updated_at,
                                   odds_error=odds_error,
                                   active_tab=active_tab)
