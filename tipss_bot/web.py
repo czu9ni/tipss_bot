@@ -922,27 +922,18 @@ TEMPLATE = """
             <div class="col-12">
                 <div class="card mb-4">
                     <div class="card-header bg-light">
-                        <h5 class="mb-0">Legfrissebb hirek (RSS)</h5>
+                        <h5 class="mb-0">Hir-osszefoglalo (RSS)</h5>
                     </div>
                     <div class="card-body">
                         {% if rss_items %}
-                            <ul class="list-group list-group-flush">
-                                {% for item in rss_items %}
-                                <li class="list-group-item">
-                                    {% if item.link %}
-                                        <a href="{{ item.link }}" target="_blank" rel="noopener">{{ item.title }}</a>
-                                    {% else %}
-                                        {{ item.title }}
-                                    {% endif %}
-                                    {% if item.summary %}
-                                        <div class="text-muted small">{{ item.summary }}</div>
-                                    {% endif %}
-                                    {% if item.source %}
-                                        <div class="text-muted small">Forras: {{ item.source }}</div>
-                                    {% endif %}
-                                </li>
-                                {% endfor %}
-                            </ul>
+                            <p class="text-muted">
+                                A hirforrasokban tobb, seruleshez es keretvaltozashoz kotheto cikk
+                                szerepelhet. Ezeket a modell a "serules kockazat" es "pozitiv hirek"
+                                komponensekben figyelembe veszi.
+                            </p>
+                            <p class="text-muted">
+                                Forrasok: {{ rss_sources }}
+                            </p>
                         {% else %}
                             <p class="text-muted text-center">Nincs elerheto hir.</p>
                         {% endif %}
@@ -1184,6 +1175,9 @@ def dashboard():
     except Exception:
         pass
 
+    rss_sources = ", ".join(
+        sorted({item.get("source", "") for item in rss_items if item.get("source")})
+    )
     return render_template_string(TEMPLATE,
                                   odds_configured=bool(config.odds_api_key),
                                   football_configured=bool(config.football_data_token),
@@ -1197,7 +1191,8 @@ def dashboard():
                                   matches=matches,
                                   points_table=points_table,
                                   _match_reasons=_match_reasons,
-                                  rss_items=rss_items)
+                                  rss_items=rss_items,
+                                  rss_sources=rss_sources)
 
 if __name__ == '__main__':
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
