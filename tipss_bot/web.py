@@ -2,6 +2,7 @@ from flask import Flask, render_template_string, request, redirect, url_for
 from soccer_bot.config import load_config
 from soccer_bot.db import connect
 from soccer_bot.repo import get_team_stats, list_matches
+from soccer_bot.offline_stats import build_team_summary
 from soccer_bot.scoring import match_points, table
 import html
 import json
@@ -37,6 +38,7 @@ _ELO_CACHE: dict[str, float] = {}
 _TEAM_ID_MAP: dict[str, int] | None = None
 _FORM_CACHE: dict[int, dict[str, float]] = {}
 _FORM_CACHE_TTL_SECONDS = 3600
+_STANDINGS_CACHE: dict[str, list[dict]] = {}
 _ODDS_MARKETS_DEFAULT = "h2h,totals,btts,team_totals,spreads,draw_no_bet,double_chance,alternate_totals,alternate_team_totals,alternate_spreads"
 _PICK_MIN_ODDS = float(os.environ.get("PICK_MIN_ODDS", "0"))
 _PICK_MAX_ODDS = float(os.environ.get("PICK_MAX_ODDS", "0"))
@@ -383,6 +385,115 @@ def _normalize_team_name(name: str) -> str:
     cleaned = re.sub(r"[^a-z0-9]", "", name.lower())
     cleaned = cleaned.replace("fc", "").replace("cf", "").replace("afc", "")
     return cleaned
+
+
+def _sport_key_to_comp(sport_key: str) -> str | None:
+    mapping = {
+        "soccer_epl": "PL",
+        "soccer_spain_la_liga": "PD",
+        "soccer_italy_serie_a": "SA",
+        "soccer_germany_bundesliga": "BL1",
+        "soccer_france_ligue_one": "FL1",
+        "soccer_netherlands_eredivisie": "DED",
+        "soccer_portugal_primeira_liga": "PPL",
+        "soccer_scotland_premiership": "SPL",
+        "soccer_belgium_first_div": "BSA",
+        "soccer_austria_bundesliga": "ABL",
+        "soccer_sweden_allsvenskan": "ASL",
+        "soccer_denmark_superliga": "DSL",
+        "soccer_norway_eliteserien": "EL1",
+        "soccer_turkey_super_league": "TSL",
+        "soccer_brazil_campeonato": "BSA",
+        "soccer_usa_mls": "MLS",
+    }
+    return mapping.get(sport_key)
+
+
+def _fetch_standings(comp_code: str) -> list[dict]:
+    if not comp_code:
+        return []
+    if comp_code in _STANDINGS_CACHE:
+        return _STANDINGS_CACHE[comp_code]
+    try:
+        headers = {"X-Auth-Token": config.football_data_token}
+        response = requests.get(
+            f"https://api.football-data.org/v4/competitions/{comp_code}/standings",
+            headers=headers,
+            timeout=12,
+        )
+        if response.status_code != 200:
+            return []
+        data = response.json()
+        tables = data.get("standings", [])
+        total = None
+        for table_item in tables:
+            if table_item.get("type") == "TOTAL":
+                total = table_item
+                break
+        total = total or (tables[0] if tables else None)
+        if not total:
+            return []
+        rows = []
+        for row in total.get("table", [])[:20]:
+            team = row.get("team", {}).get("name")
+            points = row.get("points")
+            position = row.get("position")
+            if team and points is not None and position is not None:
+                rows.append({"position": position, "team": team, "points": points})
+        _STANDINGS_CACHE[comp_code] = rows
+        return rows
+    except Exception:
+        return []
+
+
+def _summary_dict(team_name: str) -> dict:
+    summary = build_team_summary(team_name, limit=5)
+    matches = []
+    for row in summary.matches:
+        home = row.home
+        away = row.away
+        is_home = _normalize_team_name(home) == _normalize_team_name(team_name)
+        gf = row.home_goals if is_home else row.away_goals
+        ga = row.away_goals if is_home else row.home_goals
+        opponent = away if is_home else home
+        matches.append(
+            {
+                "date": row.date,
+                "opponent": opponent,
+                "score": f"{gf}-{ga}",
+                "home": is_home,
+            }
+        )
+    return {
+        "team": summary.team,
+        "win_rate": summary.win_rate,
+        "goals_for_avg": summary.goals_for_avg,
+        "corners_avg": summary.corners_avg,
+        "cards_avg": summary.cards_avg,
+        "source": summary.source,
+        "matches": matches,
+    }
+
+
+def _standings_highlight(standings: list[dict], team_name: str) -> dict:
+    key = _normalize_team_name(team_name)
+    for row in standings:
+        if _normalize_team_name(row.get("team", "")) == key:
+            return row
+    return {}
+
+
+def _enrich_pick(pick: dict) -> dict:
+    if not pick:
+        return pick
+    pick["home_summary"] = _summary_dict(pick.get("home_team", ""))
+    pick["away_summary"] = _summary_dict(pick.get("away_team", ""))
+    comp_code = _sport_key_to_comp(pick.get("sport_key", ""))
+    standings = _fetch_standings(comp_code)
+    pick["standings"] = standings
+    pick["home_standing"] = _standings_highlight(standings, pick.get("home_team", ""))
+    pick["away_standing"] = _standings_highlight(standings, pick.get("away_team", ""))
+    return pick
 
 
 def _is_rivalry(home_team: str, away_team: str) -> bool:
@@ -1627,6 +1738,10 @@ TEMPLATE = """
                             Kulonbseg a sima odds-hoz kepest: a piac csak arat ad, a robot ezt kiegesziti
                             a csapatok aktualis allapotaval, es rangsorol egy valoszinusegi pontszam alapjan.
                         </p>
+                        <p class="text-muted mt-2 mb-0">
+                            Adatforrasok: StatsBomb Open Data (attributio kotelezo), datasets/football-datasets,
+                            schochastics/football-data, international_results.
+                        </p>
                     </div>
                 </div>
             </div>
@@ -1679,6 +1794,67 @@ TEMPLATE = """
                                     </tr>
                                 </tbody>
                             </table>
+                            {% if best_pick.home_summary and best_pick.away_summary %}
+                            <div class="row mt-3">
+                                <div class="col-md-6">
+                                    <div class="card mb-3">
+                                        <div class="card-header bg-secondary text-white">
+                                            <h6 class="mb-0">{{ best_pick.home_summary.team }} - utobbi 5 meccs atlag</h6>
+                                        </div>
+                                        <div class="card-body">
+                                            <p class="text-muted mb-1">Gyozelmi arany: {{ "%.0f"|format(best_pick.home_summary.win_rate * 100) }}%</p>
+                                            <p class="text-muted mb-1">Rugott gol atlag: {{ "%.2f"|format(best_pick.home_summary.goals_for_avg) }}</p>
+                                            <p class="text-muted mb-1">Szogletek atlag: {{ "%.2f"|format(best_pick.home_summary.corners_avg) if best_pick.home_summary.corners_avg is not none else "n/a" }}</p>
+                                            <p class="text-muted mb-2">Lapok atlag: {{ "%.2f"|format(best_pick.home_summary.cards_avg) if best_pick.home_summary.cards_avg is not none else "n/a" }}</p>
+                                            <p class="text-muted mb-2">Forras: {{ best_pick.home_summary.source }}</p>
+                                            <ul class="list-group list-group-flush">
+                                                {% for row in best_pick.home_summary.matches %}
+                                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                    {{ row.date }} vs {{ row.opponent }}
+                                                    <span class="badge bg-secondary">{{ row.score }}</span>
+                                                </li>
+                                                {% endfor %}
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="card mb-3">
+                                        <div class="card-header bg-secondary text-white">
+                                            <h6 class="mb-0">{{ best_pick.away_summary.team }} - utobbi 5 meccs atlag</h6>
+                                        </div>
+                                        <div class="card-body">
+                                            <p class="text-muted mb-1">Gyozelmi arany: {{ "%.0f"|format(best_pick.away_summary.win_rate * 100) }}%</p>
+                                            <p class="text-muted mb-1">Rugott gol atlag: {{ "%.2f"|format(best_pick.away_summary.goals_for_avg) }}</p>
+                                            <p class="text-muted mb-1">Szogletek atlag: {{ "%.2f"|format(best_pick.away_summary.corners_avg) if best_pick.away_summary.corners_avg is not none else "n/a" }}</p>
+                                            <p class="text-muted mb-2">Lapok atlag: {{ "%.2f"|format(best_pick.away_summary.cards_avg) if best_pick.away_summary.cards_avg is not none else "n/a" }}</p>
+                                            <p class="text-muted mb-2">Forras: {{ best_pick.away_summary.source }}</p>
+                                            <ul class="list-group list-group-flush">
+                                                {% for row in best_pick.away_summary.matches %}
+                                                <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                    {{ row.date }} vs {{ row.opponent }}
+                                                    <span class="badge bg-secondary">{{ row.score }}</span>
+                                                </li>
+                                                {% endfor %}
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            {% if best_pick.standings %}
+                            <div class="card mt-2">
+                                <div class="card-header bg-dark text-white">
+                                    <h6 class="mb-0">Tabella kiemelve</h6>
+                                </div>
+                                <div class="card-body">
+                                    <p class="text-muted mb-2">
+                                        {{ best_pick.home_team }} helyezes: {{ best_pick.home_standing.position if best_pick.home_standing else "n/a" }},
+                                        {{ best_pick.away_team }} helyezes: {{ best_pick.away_standing.position if best_pick.away_standing else "n/a" }}
+                                    </p>
+                                </div>
+                            </div>
+                            {% endif %}
+                            {% endif %}
                         {% else %}
                             <p class="text-muted text-center">
                                 {% if odds_error %}
@@ -1749,6 +1925,69 @@ TEMPLATE = """
                                 </tbody>
                             </table>
                             <p class="text-muted text-center">Odds pool: {{ odds_count }} meccs (24h, nem rangado)</p>
+                            {% for pick in best_combo.matches %}
+                                {% if pick.home_summary and pick.away_summary %}
+                                <div class="row mt-3">
+                                    <div class="col-md-6">
+                                        <div class="card mb-3">
+                                            <div class="card-header bg-secondary text-white">
+                                                <h6 class="mb-0">{{ pick.home_summary.team }} - utobbi 5 meccs atlag</h6>
+                                            </div>
+                                            <div class="card-body">
+                                                <p class="text-muted mb-1">Gyozelmi arany: {{ "%.0f"|format(pick.home_summary.win_rate * 100) }}%</p>
+                                                <p class="text-muted mb-1">Rugott gol atlag: {{ "%.2f"|format(pick.home_summary.goals_for_avg) }}</p>
+                                                <p class="text-muted mb-1">Szogletek atlag: {{ "%.2f"|format(pick.home_summary.corners_avg) if pick.home_summary.corners_avg is not none else "n/a" }}</p>
+                                                <p class="text-muted mb-2">Lapok atlag: {{ "%.2f"|format(pick.home_summary.cards_avg) if pick.home_summary.cards_avg is not none else "n/a" }}</p>
+                                                <p class="text-muted mb-2">Forras: {{ pick.home_summary.source }}</p>
+                                                <ul class="list-group list-group-flush">
+                                                    {% for row in pick.home_summary.matches %}
+                                                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                        {{ row.date }} vs {{ row.opponent }}
+                                                        <span class="badge bg-secondary">{{ row.score }}</span>
+                                                    </li>
+                                                    {% endfor %}
+                                                </ul>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="card mb-3">
+                                            <div class="card-header bg-secondary text-white">
+                                                <h6 class="mb-0">{{ pick.away_summary.team }} - utobbi 5 meccs atlag</h6>
+                                            </div>
+                                            <div class="card-body">
+                                                <p class="text-muted mb-1">Gyozelmi arany: {{ "%.0f"|format(pick.away_summary.win_rate * 100) }}%</p>
+                                                <p class="text-muted mb-1">Rugott gol atlag: {{ "%.2f"|format(pick.away_summary.goals_for_avg) }}</p>
+                                                <p class="text-muted mb-1">Szogletek atlag: {{ "%.2f"|format(pick.away_summary.corners_avg) if pick.away_summary.corners_avg is not none else "n/a" }}</p>
+                                                <p class="text-muted mb-2">Lapok atlag: {{ "%.2f"|format(pick.away_summary.cards_avg) if pick.away_summary.cards_avg is not none else "n/a" }}</p>
+                                                <p class="text-muted mb-2">Forras: {{ pick.away_summary.source }}</p>
+                                                <ul class="list-group list-group-flush">
+                                                    {% for row in pick.away_summary.matches %}
+                                                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                                                        {{ row.date }} vs {{ row.opponent }}
+                                                        <span class="badge bg-secondary">{{ row.score }}</span>
+                                                    </li>
+                                                    {% endfor %}
+                                                </ul>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                {% if pick.standings %}
+                                <div class="card mt-2 mb-3">
+                                    <div class="card-header bg-dark text-white">
+                                        <h6 class="mb-0">Tabella kiemelve</h6>
+                                    </div>
+                                    <div class="card-body">
+                                        <p class="text-muted mb-2">
+                                            {{ pick.home_team }} helyezes: {{ pick.home_standing.position if pick.home_standing else "n/a" }},
+                                            {{ pick.away_team }} helyezes: {{ pick.away_standing.position if pick.away_standing else "n/a" }}
+                                        </p>
+                                    </div>
+                                </div>
+                                {% endif %}
+                                {% endif %}
+                            {% endfor %}
                         {% else %}
                             <p class="text-muted text-center">
                                 {% if odds_error %}
@@ -2054,6 +2293,7 @@ def dashboard():
                 if picks:
                     best_combo = _build_best_combo(picks, target_odds)
                     best_pick = max(picks, key=lambda item: item["score"])
+                    best_pick = _enrich_pick(best_pick)
 
                 odds_match = None
                 for match in eligible:
@@ -2121,6 +2361,9 @@ def dashboard():
 
                 if picks:
                     target_matches = _select_picks_near_odds(picks, target_odds, limit=2)
+                    target_matches = [_enrich_pick(item) for item in target_matches]
+                if best_combo and best_combo.get("matches"):
+                    best_combo["matches"] = [_enrich_pick(item) for item in best_combo["matches"]]
             _store_cached_picks(
                 db,
                 {

@@ -4,3 +4,4 @@ __pycache__/
 soccer.db
 .pytest_cache/
 .env
+data/externals/
