@@ -49,14 +49,19 @@ def _parse_rss_items(xml_text: str) -> list[dict]:
         for item in root.findall(".//item"):
             title = _strip_html(item.findtext("title", default=""))
             description = _strip_html(item.findtext("description", default=""))
-            items.append({"title": title, "summary": description})
+            link = _strip_html(item.findtext("link", default=""))
+            items.append({"title": title, "summary": description, "link": link})
         if items:
             return items
         ns = {"atom": "http://www.w3.org/2005/Atom"}
         for entry in root.findall(".//atom:entry", ns):
             title = _strip_html(entry.findtext("atom:title", default="", namespaces=ns))
             summary = _strip_html(entry.findtext("atom:summary", default="", namespaces=ns))
-            items.append({"title": title, "summary": summary})
+            link = ""
+            link_node = entry.find("atom:link", ns)
+            if link_node is not None:
+                link = link_node.attrib.get("href", "")
+            items.append({"title": title, "summary": summary, "link": link})
     except Exception:
         return []
     return items
@@ -914,6 +919,39 @@ TEMPLATE = """
         </div>
 
         <div class="row">
+            <div class="col-12">
+                <div class="card mb-4">
+                    <div class="card-header bg-light">
+                        <h5 class="mb-0">Legfrissebb hirek (RSS)</h5>
+                    </div>
+                    <div class="card-body">
+                        {% if rss_items %}
+                            <ul class="list-group list-group-flush">
+                                {% for item in rss_items %}
+                                <li class="list-group-item">
+                                    {% if item.link %}
+                                        <a href="{{ item.link }}" target="_blank" rel="noopener">{{ item.title }}</a>
+                                    {% else %}
+                                        {{ item.title }}
+                                    {% endif %}
+                                    {% if item.summary %}
+                                        <div class="text-muted small">{{ item.summary }}</div>
+                                    {% endif %}
+                                    {% if item.source %}
+                                        <div class="text-muted small">Forras: {{ item.source }}</div>
+                                    {% endif %}
+                                </li>
+                                {% endfor %}
+                            </ul>
+                        {% else %}
+                            <p class="text-muted text-center">Nincs elerheto hir.</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
             <div class="col-md-6">
                 <div class="card mb-4">
                     <div class="card-header bg-info text-white">
@@ -1158,7 +1196,8 @@ def dashboard():
                                   target_matches=target_matches,
                                   matches=matches,
                                   points_table=points_table,
-                                  _match_reasons=_match_reasons)
+                                  _match_reasons=_match_reasons,
+                                  rss_items=rss_items)
 
 if __name__ == '__main__':
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
