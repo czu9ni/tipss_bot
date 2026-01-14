@@ -209,13 +209,17 @@
             <span class="dot good"></span> Frissitve - <strong>{{ cached_updated_at[:16] }}</strong>
           </div>
           {% endif %}
-          <a class="btn" href="/?tab={{ active_tab }}&refresh=1">
-            Frissits tippeket
-            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M20 12a8 8 0 1 1-2.343-5.657" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-              <path d="M20 4v6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </a>
+          <form action="/" method="get">
+            <input type="hidden" name="tab" value="{{ active_tab }}">
+            <input type="hidden" name="refresh" value="1">
+            <button class="btn" type="submit">
+              Frissits tippeket
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M20 12a8 8 0 1 1-2.343-5.657" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                <path d="M20 4v6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          </form>
         </div>
       </div>
 
@@ -299,7 +303,7 @@
           {% if odds_error %}
           <p class="muted" style="margin-top:10px">Odds API hiba: {{ odds_error }}</p>
           {% endif %}
-          <p class="muted" style="margin-top:6px">Diagnosztika 24h: ligak meccs = {{ diag_counts.comp_24 }}, osszes meccs = {{ diag_counts.all_24 }}, api-football = {{ diag_counts.api_football_24 }}, ablak = {{ diag_counts.window_from }}..{{ diag_counts.window_to }}</p>
+          <p class="muted" style="margin-top:6px">Diagnosztika 24h: ligak meccs = {{ diag_counts.comp_24 }}, osszes meccs = {{ diag_counts.all_24 }}, api-football = {{ diag_counts.api_football_24 }}, ablak = {{ diag_counts.window_from }}..{{ diag_counts.window_to }}, ido forras = {{ diag_counts.window_source }}</p>
         </div>
       </section>
 

@@ -28,11 +28,14 @@ RSS_CACHE_TTL_SECONDS = 600
 _RSS_CACHE: dict[str, object] = {"fetched_at": 0.0, "items": []}
 _GEOCODE_CACHE: dict[str, dict] = {}
 _SERVER_TIME_CACHE = {"ts": 0.0, "value": None}
+_SERVER_TIME_SOURCE = "system"
+_LAST_WINDOW_INFO = {"from": "", "to": "", "source": "system"}
 
 
 def _server_time_utc() -> datetime | None:
     if _SERVER_TIME_CACHE["value"] and (time.time() - _SERVER_TIME_CACHE["ts"]) < 3600:
         return _SERVER_TIME_CACHE["value"]
+    global _SERVER_TIME_SOURCE
     key = config.api_football_key
     if key:
         try:
@@ -56,6 +59,7 @@ def _server_time_utc() -> datetime | None:
                 if value:
                     _SERVER_TIME_CACHE["ts"] = time.time()
                     _SERVER_TIME_CACHE["value"] = value
+                    _SERVER_TIME_SOURCE = "api-football"
                     return value
         except Exception:
             pass
@@ -77,6 +81,7 @@ def _server_time_utc() -> datetime | None:
                     value = value.astimezone(timezone.utc)
                     _SERVER_TIME_CACHE["ts"] = time.time()
                     _SERVER_TIME_CACHE["value"] = value
+                    _SERVER_TIME_SOURCE = "football-data"
                     return value
         except Exception:
             pass
@@ -96,6 +101,7 @@ def _server_time_utc() -> datetime | None:
                 value = value.astimezone(timezone.utc)
                 _SERVER_TIME_CACHE["ts"] = time.time()
                 _SERVER_TIME_CACHE["value"] = value
+                _SERVER_TIME_SOURCE = "open-meteo"
                 return value
     except Exception:
         pass
@@ -1112,7 +1118,14 @@ def _diagnostics_fixtures(token: str, competitions: list[dict], hours: int = 24)
     all_count = len(_fetch_upcoming_fixtures_fd_all(token, hours))
     api_football_count = len(_fetch_upcoming_fixtures_api_football(config.api_football_key, hours))
     _, date_from, date_to = _fixture_window(hours)
-    return {"comp_24": comps_count, "all_24": all_count, "api_football_24": api_football_count, "window_from": date_from, "window_to": date_to}
+    return {
+        "comp_24": comps_count,
+        "all_24": all_count,
+        "api_football_24": api_football_count,
+        "window_from": date_from,
+        "window_to": date_to,
+        "window_source": _LAST_WINDOW_INFO.get("source", "system"),
+    }
 
 
 
@@ -1128,14 +1141,19 @@ def _fixture_window(hours: int) -> tuple[datetime, str, str]:
         base = datetime.now(timezone.utc)
 
     # If system clock looks wrong, try API-Football server time
+    source = "system"
     if base.year < 2020 or base.year > 2025:
         server_time = _server_time_utc()
         if server_time:
             base = server_time
+            source = _SERVER_TIME_SOURCE
 
     days_ahead = max(1, int(math.ceil(hours / 24)))
     date_from = base.date().isoformat()
     date_to = (base + timedelta(days=days_ahead)).date().isoformat()
+    _LAST_WINDOW_INFO["from"] = date_from
+    _LAST_WINDOW_INFO["to"] = date_to
+    _LAST_WINDOW_INFO["source"] = source
     return base, date_from, date_to
 
 def _fetch_upcoming_fixtures_api_football(api_key: str, hours: int = 24, limit: int = 40) -> list[dict]:
@@ -2051,7 +2069,7 @@ def dashboard():
     best_pick = None
     best_combo = None
     cached_updated_at = None
-    diag_counts = {"comp_24": 0, "all_24": 0, "api_football_24": 0, "window_from": "", "window_to": ""}
+    diag_counts = {"comp_24": 0, "all_24": 0, "api_football_24": 0, "window_from": "", "window_to": "", "window_source": "system"}
     if refresh_requested:
         try:
             diag_counts = _diagnostics_fixtures(config.football_data_token, competitions, window_hours)
