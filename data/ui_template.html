@@ -204,6 +204,9 @@
               <span class="dot good"></span> Rendszer - <strong>OK</strong>
             {% endif %}
           </div>
+          <div class="pill" title="Frissites kerese">
+            <span class="dot good"></span> Frissites kert - <strong>{{ "igen" if refresh_requested else "nem" }}</strong>
+          </div>
           {% if cached_updated_at %}
           <div class="pill" title="Utolso frissites">
             <span class="dot good"></span> Frissitve - <strong>{{ cached_updated_at[:16] }}</strong>
@@ -303,7 +306,7 @@
           {% if odds_error %}
           <p class="muted" style="margin-top:10px">Odds API hiba: {{ odds_error }}</p>
           {% endif %}
-          <p class="muted" style="margin-top:6px">Diagnosztika 24h: ligak meccs = {{ diag_counts.comp_24 }}, osszes meccs = {{ diag_counts.all_24 }}, api-football = {{ diag_counts.api_football_24 }}, ablak = {{ diag_counts.window_from }}..{{ diag_counts.window_to }}, ido forras = {{ diag_counts.window_source }}</p>
+          <p class="muted" style="margin-top:6px">Diagnosztika 24h: ligak meccs = {{ diag_counts.comp_24 }}, osszes meccs = {{ diag_counts.all_24 }}, api-football = {{ diag_counts.api_football_24 }}, ablak = {{ diag_counts.window_from }}..{{ diag_counts.window_to }}, ido forras = {{ diag_counts.window_source }}, api-football kulcs = {{ "igen" if diag_counts.api_football_enabled else "nem" }}</p>
         </div>
       </section>
 

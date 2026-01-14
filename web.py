@@ -1125,6 +1125,7 @@ def _diagnostics_fixtures(token: str, competitions: list[dict], hours: int = 24)
         "window_from": date_from,
         "window_to": date_to,
         "window_source": _LAST_WINDOW_INFO.get("source", "system"),
+        "api_football_enabled": bool(config.api_football_key),
     }
 
 
@@ -2316,7 +2317,8 @@ def dashboard():
                                   diag_counts=diag_counts,
                                   cached_updated_at=cached_updated_at,
                                   odds_error=odds_error,
-                                  active_tab=active_tab)
+                                  active_tab=active_tab,
+                                  refresh_requested=refresh_requested)
 
 
 @app.route("/save_pick", methods=["POST"])
