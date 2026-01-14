@@ -1850,6 +1850,17 @@ def dashboard():
                     standings_by_comp[code] = _fetch_standings_fd(config.football_data_token, code)
                     fixtures.extend(_fetch_upcoming_fixtures_fd(config.football_data_token, code, window_hours))
                 picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
+                if not picks:
+                    fallback_hours = 72
+                    fixtures = []
+                    for comp in competitions:
+                        code = comp.get("code")
+                        if not code:
+                            continue
+                        fixtures.extend(_fetch_upcoming_fixtures_fd(config.football_data_token, code, fallback_hours))
+                    picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
+                    if picks:
+                        odds_error = "Odds API kulcs hianyzik (odds nelkuli ajanlas, 72h ablak)"
                 odds_count = len(picks)
                 best_pick = _enrich_pick(picks[0]) if picks else None
                 best_combo = None
@@ -1869,37 +1880,49 @@ def dashboard():
             else:
                 data, odds_error = _fetch_odds_matches(config.odds_api_key)
                 eligible = []
-            use_odds = bool(data) and not odds_error
-            if not use_odds:
-                if not odds_error:
-                    odds_error = "Odds API adat nem elerheto (odds nelkuli ajanlas)"
-                rss_items = _fetch_rss_items()
-                standings_by_comp = {}
-                fixtures = []
-                for comp in competitions:
-                    code = comp.get("code")
-                    if not code:
-                        continue
-                    standings_by_comp[code] = _fetch_standings_fd(config.football_data_token, code)
-                    fixtures.extend(_fetch_upcoming_fixtures_fd(config.football_data_token, code, window_hours))
-                picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
-                odds_count = len(picks)
-                best_pick = _enrich_pick(picks[0]) if picks else None
-                best_combo = None
-                target_matches = [_enrich_pick(item) for item in picks[:2]] if picks else []
-                _store_cached_picks(
-                    db,
-                    {
-                        "odds_data": odds_data,
-                        "best_pick": best_pick,
-                        "best_combo": best_combo,
-                        "target_matches": target_matches,
-                        "odds_count": odds_count,
-                        "odds_error": odds_error,
-                        "rss_sources": ", ".join(sorted({item.get("source", "") for item in rss_items if item.get("source")})),
-                    },
-                )
-            if use_odds and data:
+                use_odds = bool(data) and not odds_error
+                if not use_odds:
+                    if not odds_error:
+                        odds_error = "Odds API adat nem elerheto (odds nelkuli ajanlas)"
+                    rss_items = _fetch_rss_items()
+                    standings_by_comp = {}
+                    fixtures = []
+                    for comp in competitions:
+                        code = comp.get("code")
+                        if not code:
+                            continue
+                        standings_by_comp[code] = _fetch_standings_fd(config.football_data_token, code)
+                        fixtures.extend(_fetch_upcoming_fixtures_fd(config.football_data_token, code, window_hours))
+                    picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
+                    if not picks:
+                        fallback_hours = 72
+                        fixtures = []
+                        for comp in competitions:
+                            code = comp.get("code")
+                            if not code:
+                                continue
+                            fixtures.extend(_fetch_upcoming_fixtures_fd(config.football_data_token, code, fallback_hours))
+                        picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
+                        if picks:
+                            odds_error = "Odds API adat nem elerheto (72h ablak)"
+                    odds_count = len(picks)
+                    best_pick = _enrich_pick(picks[0]) if picks else None
+                    best_combo = None
+                    target_matches = [_enrich_pick(item) for item in picks[:2]] if picks else []
+                    _store_cached_picks(
+                        db,
+                        {
+                            "odds_data": odds_data,
+                            "best_pick": best_pick,
+                            "best_combo": best_combo,
+                            "target_matches": target_matches,
+                            "odds_count": odds_count,
+                            "odds_error": odds_error,
+                            "rss_sources": ", ".join(sorted({item.get("source", "") for item in rss_items if item.get("source")})),
+                        },
+                    )
+                if use_odds and data:
+
                 for match in data:
                     home_team = match.get("home_team", "")
                     away_team = match.get("away_team", "")
