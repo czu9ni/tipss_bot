@@ -6,12 +6,12 @@ class AppConfig(BaseModel):
     db_url: str = Field(..., description="Database URL, must be SQLite")
     api_base_url: str = Field(default="", description="Base URL for API (optional)")
     api_key: str = Field(default="", description="API key for general API (optional)")
-    odds_api_key: str = Field(..., min_length=10, description="Odds API key")
+    odds_api_key: str = Field(default="", description="Odds API key")
     football_data_token: str = Field(..., min_length=10, description="Football Data token")
     log_level: str = Field(default="INFO", pattern="^(DEBUG|INFO|WARNING|ERROR)$", description="Logging level")
 
 
-REQUIRED_ENV_VARS = ("SOCCER_DB_URL", "ODDS_API_KEY", "FOOTBALL_DATA_TOKEN")
+REQUIRED_ENV_VARS = ("SOCCER_DB_URL", "FOOTBALL_DATA_TOKEN")
 
 
 def load_config(environ: dict[str, str] | None = None) -> AppConfig:
@@ -25,7 +25,7 @@ def load_config(environ: dict[str, str] | None = None) -> AppConfig:
             db_url=env["SOCCER_DB_URL"],
             api_base_url=env.get("SOCCER_API_BASE_URL", ""),
             api_key=env.get("SOCCER_API_KEY", ""),
-            odds_api_key=env["ODDS_API_KEY"],
+            odds_api_key=env.get("ODDS_API_KEY", ""),
             football_data_token=env["FOOTBALL_DATA_TOKEN"],
             weather_api_key=env.get("WEATHER_API_KEY", ""),
             news_api_key=env.get("NEWS_API_KEY", ""),

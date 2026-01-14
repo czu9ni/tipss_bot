@@ -1,0 +1,751 @@
+<!doctype html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Soccer Bot AI Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root{
+      --bg0:#15213f;
+      --bg1:#2a3a6d;
+      --card: rgba(255,255,255,.22);
+      --card2: rgba(255,255,255,.14);
+      --border: rgba(255,255,255,.28);
+      --txt: rgba(255,255,255,.95);
+      --muted: rgba(255,255,255,.80);
+      --shadow: 0 20px 60px rgba(2,6,16,.45);
+      --r: 22px;
+      --g: linear-gradient(135deg,#00e5ff,#7c4dff,#ff2ea6,#ffb300,#4dff88);
+      --good:#4dff88;
+      --warn:#ffb300;
+      --bad:#ff2e6a;
+      --cyan:#00e5ff;
+      --violet:#7c4dff;
+      --pink:#ff2ea6;
+      --orange:#ff7a18;
+      --lime:#4dff88;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0;
+      font-family:"Space Grotesk",system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+      color:var(--txt);
+      background:
+        radial-gradient(1200px 600px at 20% -10%, rgba(0,229,255,.52), transparent 55%),
+        radial-gradient(1000px 700px at 110% 10%, rgba(124,77,255,.48), transparent 55%),
+        radial-gradient(900px 700px at 70% 120%, rgba(255,46,166,.38), transparent 60%),
+        radial-gradient(600px 420px at 35% 65%, rgba(77,255,136,.34), transparent 60%),
+        linear-gradient(180deg, var(--bg0), var(--bg1));
+      overflow-x:hidden;
+    }
+
+    .stars{
+      position:fixed; inset:0;
+      pointer-events:none;
+      opacity:.7;
+      background-image:
+        radial-gradient(2px 2px at 20px 30px, rgba(255,255,255,.55) 40%, transparent 41%),
+        radial-gradient(1px 1px at 140px 90px, rgba(255,255,255,.35) 40%, transparent 41%),
+        radial-gradient(1.5px 1.5px at 280px 150px, rgba(255,255,255,.28) 40%, transparent 41%),
+        radial-gradient(1px 1px at 420px 60px, rgba(255,255,255,.24) 40%, transparent 41%),
+        radial-gradient(1.5px 1.5px at 560px 120px, rgba(255,255,255,.20) 40%, transparent 41%);
+      background-size: 600px 220px;
+      filter: blur(.2px);
+      animation: drift 18s linear infinite;
+    }
+    @keyframes drift { from{transform:translateY(0)} to{transform:translateY(40px)} }
+
+    .wrap{max-width:1180px;margin:0 auto;padding:28px 18px 70px}
+    header{position:relative;padding:22px 0 18px;margin-bottom:18px;}
+    .hero{
+      display:flex; align-items:flex-start; justify-content:space-between; gap:16px;
+      padding:18px 18px 14px;
+      border-radius:28px;
+      background: linear-gradient(180deg, rgba(255,255,255,.09), rgba(255,255,255,.05));
+      border:1px solid rgba(255,255,255,.14);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(14px);
+    }
+    .brand{display:flex; align-items:center; gap:14px;}
+    .logo{
+      width:44px;height:44px;border-radius:14px;
+      background: conic-gradient(from 210deg, #00e5ff, #7c4dff, #ff2ea6, #ffb300, #4dff88, #00e5ff);
+      box-shadow: 0 10px 30px rgba(0,229,255,.12);
+      position:relative; overflow:hidden;
+    }
+    .logo:after{
+      content:""; position:absolute; inset:-30%;
+      background: linear-gradient(120deg, transparent 0%, rgba(255,255,255,.55) 18%, transparent 38%);
+      transform: rotate(12deg);
+      animation: shine 3.6s ease-in-out infinite;
+      opacity:.35;
+    }
+    @keyframes shine{0%{transform:translateX(-40%) rotate(12deg)}55%{transform:translateX(40%) rotate(12deg)}100%{transform:translateX(60%) rotate(12deg)}}
+    h1{margin:0;font-size:34px;letter-spacing:-.02em;line-height:1.05;}
+    .sub{margin:6px 0 0;color:var(--muted);font-size:14px}
+    .top-actions{display:flex;gap:10px;align-items:center}
+    .pill{
+      display:inline-flex; align-items:center; gap:8px;
+      padding:9px 12px; border-radius:999px;
+      border:1px solid rgba(255,255,255,.14);
+      background: rgba(255,255,255,.07);
+      backdrop-filter: blur(10px);
+      color:rgba(255,255,255,.82); font-size:13px; user-select:none;
+    }
+    .dot{width:8px;height:8px;border-radius:50%}
+    .dot.good{background:var(--good);box-shadow:0 0 14px rgba(77,255,136,.55)}
+    .dot.warn{background:var(--warn);box-shadow:0 0 14px rgba(255,179,0,.55)}
+    .dot.bad{background:var(--bad);box-shadow:0 0 14px rgba(255,46,106,.55)}
+    .btn{
+      cursor:pointer;border:0;padding:11px 14px;border-radius:14px;font-weight:700;color:#041018;
+      background: linear-gradient(135deg, rgba(0,229,255,1), rgba(77,255,136,1));
+      box-shadow: 0 16px 40px rgba(0,229,255,.18);
+      transition: transform .15s ease, filter .2s ease, box-shadow .2s ease;
+      display:inline-flex; align-items:center; gap:10px; white-space:nowrap; text-decoration:none;
+    }
+    .btn:hover{transform:translateY(-1px); filter:saturate(1.05); box-shadow:0 20px 55px rgba(0,229,255,.22)}
+    .btn:active{transform:translateY(0px) scale(.98)}
+    .btn svg{width:18px;height:18px}
+    .btn.secondary{background: rgba(255,255,255,.10); color: rgba(255,255,255,.90); border:1px solid rgba(255,255,255,.18); box-shadow:none; padding:8px 12px; font-weight:650;}
+
+    .tabs{display:flex; gap:10px; margin:14px 2px 0; align-items:center;}
+    .tab{padding:10px 12px;border-radius:14px;color:rgba(255,255,255,.78);background: rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);cursor:pointer;font-weight:650;transition: .2s ease;display:inline-flex; gap:10px; align-items:center; text-decoration:none;}
+    .tab svg{width:18px;height:18px;opacity:.85}
+    .tab.active{background: rgba(255,255,255,.10);border-color: rgba(255,255,255,.18);box-shadow: 0 12px 28px rgba(0,0,0,.28);color: rgba(255,255,255,.92);}
+
+    .grid{margin-top:14px;display:grid;grid-template-columns: 1.1fr .9fr;gap:14px;}
+    @media (max-width: 980px){.grid{grid-template-columns:1fr}.top-actions{flex-wrap:wrap; justify-content:flex-end}h1{font-size:28px}}
+
+    .card{border-radius: var(--r);background: linear-gradient(180deg, rgba(255,255,255,.09), rgba(255,255,255,.05));border: 1px solid rgba(255,255,255,.13);box-shadow: 0 18px 48px rgba(0,0,0,.45);backdrop-filter: blur(14px);overflow:hidden;position:relative;}
+    .card:before{content:"";position:absolute; inset:-2px;background: var(--g);opacity:.18;filter: blur(20px);z-index:0;pointer-events:none;}
+    .card > *{position:relative; z-index:1}
+    .card-head{padding:14px 16px;display:flex; align-items:center; justify-content:space-between; gap:12px;border-bottom:1px solid rgba(255,255,255,.10);}
+    .card-title{margin:0;font-size:15px;letter-spacing:.01em;display:flex; align-items:center; gap:10px;}
+    .badge{font-size:12px;padding:6px 10px;border-radius:999px;background: rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color: rgba(255,255,255,.78);display:inline-flex; gap:8px; align-items:center;}
+    .badge strong{color:rgba(255,255,255,.92)}
+    .card-body{padding:14px 16px}
+
+    .list{display:grid; gap:10px}
+    .row{display:flex; align-items:center; justify-content:space-between; gap:12px;padding:10px 12px;border-radius:16px;background: rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.10);}
+    .left{display:flex; align-items:center; gap:10px; min-width:0;}
+    .icon{width:28px;height:28px;border-radius:10px;display:grid;place-items:center;background: rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);}
+    .name{font-weight:650; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+    .meta{color:var(--muted); font-size:12px; margin-top:2px}
+    .status{font-weight:800; font-size:12px;padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.12);background: rgba(255,255,255,.06);display:inline-flex; align-items:center; gap:8px;}
+    .status .dot{width:7px;height:7px}
+    .status.ok{color:rgba(77,255,136,.95)}
+    .status.warn{color:rgba(255,179,0,.95)}
+    .status.bad{color:rgba(255,46,106,.95)}
+
+    .span2{grid-column:1/-1}
+    .highlight{border-radius: 24px;background: linear-gradient(180deg, rgba(255,255,255,.09), rgba(255,255,255,.045));border: 1px solid rgba(255,255,255,.13);box-shadow: 0 22px 58px rgba(0,0,0,.50);overflow:hidden;position:relative;}
+    .highlight:before{content:"";position:absolute; inset:-2px;background: linear-gradient(90deg, rgba(0,229,255,.60), rgba(124,77,255,.42), rgba(255,46,166,.46), rgba(255,179,0,.38), rgba(77,255,136,.45));opacity:.20;filter: blur(22px);pointer-events:none;z-index:0;}
+    .highlight > *{position:relative; z-index:1}
+    .hl-head{padding:14px 16px;display:flex; justify-content:space-between; align-items:center; gap:12px;border-bottom:1px solid rgba(255,255,255,.10);}
+    .hl-title{margin:0;font-size:15px;font-weight:800;display:flex;gap:10px;align-items:center}
+    .hl-body{padding:14px 16px}
+    .tip-grid{display:grid;grid-template-columns: 1.2fr .8fr;gap:12px;}
+    @media (max-width: 980px){ .tip-grid{grid-template-columns:1fr} }
+    .match{padding:12px;border-radius:18px;background: rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.10);display:flex; align-items:center; justify-content:space-between; gap:10px;}
+    .team{display:flex; align-items:center; gap:10px; min-width:0;}
+    .crest{width:36px;height:36px;border-radius:14px;background: rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.12);display:grid;place-items:center;overflow:hidden;}
+    .team .tname{font-weight:850; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+    .small{font-size:12px;color:var(--muted); margin-top:2px}
+    .numbers{display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:flex-end;}
+    .chip{padding:7px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.12);background: rgba(255,255,255,.06);font-weight:850;font-size:12px;}
+    .chip.odds{background: rgba(0,229,255,.12);border-color: rgba(0,229,255,.26);box-shadow: 0 0 22px rgba(0,229,255,.10);}
+    .chip.score{background: rgba(77,255,136,.12);border-color: rgba(77,255,136,.26);box-shadow: 0 0 22px rgba(77,255,136,.10);}
+    .chip.risk.green{background: rgba(77,255,136,.12); border-color: rgba(77,255,136,.26)}
+    .chip.risk.yellow{background: rgba(255,179,0,.12); border-color: rgba(255,179,0,.26)}
+    .chip.risk.red{background: rgba(255,46,106,.12); border-color: rgba(255,46,106,.26)}
+    .progress{width:140px; height:10px; border-radius:999px;background: rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);overflow:hidden;}
+    .bar{height:100%; width:0%; border-radius:999px; background: linear-gradient(90deg, var(--pink), var(--violet), var(--cyan), var(--lime));}
+    .kpi{display:grid; gap:10px;}
+    .kpi .k{padding:12px;border-radius:18px;background: rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.10);}
+    .k .label{color:var(--muted);font-size:12px}
+    .k .val{font-weight:900;font-size:22px;margin-top:6px; letter-spacing:-.02em}
+    .k .hint{color:rgba(255,255,255,.72); font-size:12px;margin-top:6px}
+
+    table{width:100%; border-collapse:separate; border-spacing:0 10px}
+    th{text-align:left;font-size:12px;color: rgba(255,255,255,.72);font-weight:800;padding:0 10px;}
+    td{padding:12px 10px;background: rgba(0,0,0,.18);border-top:1px solid rgba(255,255,255,.10);border-bottom:1px solid rgba(255,255,255,.10);}
+    td:first-child{border-left:1px solid rgba(255,255,255,.10);border-top-left-radius:14px;border-bottom-left-radius:14px;}
+    td:last-child{border-right:1px solid rgba(255,255,255,.10);border-top-right-radius:14px;border-bottom-right-radius:14px;}
+    .pillscore{display:inline-flex; align-items:center; justify-content:center;min-width:54px;padding:7px 10px;border-radius:999px;font-weight:900;background: rgba(0,229,255,.14);border:1px solid rgba(0,229,255,.26);}
+    .pillpts{display:inline-flex; align-items:center; justify-content:center;min-width:46px;padding:6px 10px;border-radius:10px;font-weight:900;background: rgba(77,255,136,.14);border:1px solid rgba(77,255,136,.26);}
+    .muted{color:var(--muted)}
+    .inline{display:inline-flex; gap:8px; align-items:center}
+  </style>
+</head>
+
+<body>
+  <div class="stars"></div>
+
+  <div class="wrap">
+    <header>
+      <div class="hero">
+        <div class="brand">
+          <div class="logo" aria-hidden="true"></div>
+          <div>
+            <h1>Soccer Bot AI Dashboard</h1>
+            <div class="sub">Fejlett futball tippek es elemzesek - odds - forma - hirek - idojaras</div>
+          </div>
+        </div>
+
+        <div class="top-actions">
+          <div class="pill" title="Rendszer allapot">
+            {% if odds_error %}
+              <span class="dot warn"></span> Odds hiba - <strong>Figyelmeztetes</strong>
+            {% else %}
+              <span class="dot good"></span> Rendszer - <strong>OK</strong>
+            {% endif %}
+          </div>
+          {% if cached_updated_at %}
+          <div class="pill" title="Utolso frissites">
+            <span class="dot good"></span> Frissitve - <strong>{{ cached_updated_at[:16] }}</strong>
+          </div>
+          {% endif %}
+          <a class="btn" href="/?tab={{ active_tab }}&refresh=1">
+            Frissits tippeket
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M20 12a8 8 0 1 1-2.343-5.657" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              <path d="M20 4v6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </a>
+        </div>
+      </div>
+
+      <div class="tabs" role="tablist" aria-label="Navigacio">
+        <a class="tab {{ "active" if active_tab == "tips" else "" }}" href="/?tab=tips" role="tab" aria-selected="{{ "true" if active_tab == "tips" else "false" }}">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 2l2.7 6.8L22 9.2l-5.3 4.6L18.3 21 12 17.4 5.7 21l1.6-7.2L2 9.2l7.3-.4L12 2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+          </svg>
+          Tippek
+        </a>
+        <a class="tab {{ "active" if active_tab == "saved" else "" }}" href="/?tab=saved" role="tab" aria-selected="{{ "true" if active_tab == "saved" else "false" }}">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M6 3h12a2 2 0 0 1 2 2v16l-8-4-8 4V5a2 2 0 0 1 2-2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+          </svg>
+          Mentett tippek
+        </a>
+      </div>
+    </header>
+
+    <main class="grid" id="panelTips" style="display: {{ "grid" if active_tab == "tips" else "none" }}">
+      <section class="card">
+        <div class="card-head">
+          <h2 class="card-title">API allapot</h2>
+          <span class="badge"><span class="dot good"></span> <strong>{{ 4 if odds_configured and football_configured else 3 }}/4</strong> online</span>
+        </div>
+        <div class="card-body">
+          <div class="list">
+            <div class="row">
+              <div class="left">
+                <div class="icon" aria-hidden="true">API</div>
+                <div style="min-width:0">
+                  <div class="name">Odds API</div>
+                  <div class="meta">Odds feed - manualis frissites</div>
+                </div>
+              </div>
+              <div class="status {{ "ok" if odds_configured else "bad" }}">
+                <span class="dot {{ "good" if odds_configured else "bad" }}"></span>
+                {{ "Beallitva" if odds_configured else "Hianyzik" }}
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="left">
+                <div class="icon" aria-hidden="true">FD</div>
+                <div style="min-width:0">
+                  <div class="name">Football Data</div>
+                  <div class="meta">Meccsek, tabella, eredmenyek</div>
+                </div>
+              </div>
+              <div class="status {{ "ok" if football_configured else "bad" }}">
+                <span class="dot {{ "good" if football_configured else "bad" }}"></span>
+                {{ "Beallitva" if football_configured else "Hianyzik" }}
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="left">
+                <div class="icon" aria-hidden="true">WX</div>
+                <div style="min-width:0">
+                  <div class="name">Idojaras</div>
+                  <div class="meta">Open-Meteo - kulcs nelkul</div>
+                </div>
+              </div>
+              <div class="status ok"><span class="dot good"></span> OK</div>
+            </div>
+
+            <div class="row">
+              <div class="left">
+                <div class="icon" aria-hidden="true">NEWS</div>
+                <div style="min-width:0">
+                  <div class="name">Hirek</div>
+                  <div class="meta">RSS osszefoglalo - {{ rss_sources or "n/a" }}</div>
+                </div>
+              </div>
+              <div class="status {{ "ok" if rss_items else "warn" }}">
+                <span class="dot {{ "good" if rss_items else "warn" }}"></span>
+                {{ "OK" if rss_items else "Korlatozott" }}
+              </div>
+            </div>
+          </div>
+          {% if odds_error %}
+          <p class="muted" style="margin-top:10px">Odds API hiba: {{ odds_error }}</p>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2 class="card-title">Aktiv bajnoksagok</h2>
+          <span class="badge"><strong>{{ competitions|length }}</strong> kivalasztva</span>
+        </div>
+        <div class="card-body">
+          <div class="list" id="leagueList">
+            {% for comp in competitions %}
+            <div class="row">
+              <div class="left">
+                <div class="icon" aria-hidden="true">L</div>
+                <div>
+                  <div class="name">{{ comp.name }}</div>
+                  <div class="meta">{{ comp.code }}</div>
+                </div>
+              </div>
+              <div class="status ok"><span class="dot good"></span> Aktiv</div>
+            </div>
+            {% endfor %}
+            {% if not competitions %}
+            <div class="row">
+              <div class="left">
+                <div class="icon" aria-hidden="true">-</div>
+                <div>
+                  <div class="name">Nincs aktiv bajnoksag</div>
+                  <div class="meta">Allits be ligakat</div>
+                </div>
+              </div>
+            </div>
+            {% endif %}
+          </div>
+        </div>
+      </section>
+      <section class="highlight span2" id="liveTip">
+        <div class="hl-head">
+          <h2 class="hl-title">Legjobb egyedi tipp (24h, nem rangado)</h2>
+          <span class="badge">Odds pool: <strong>{{ odds_count }}</strong> meccs</span>
+        </div>
+        <div class="hl-body">
+          <div class="tip-grid">
+            <div style="display:grid; gap:10px">
+              {% if best_pick %}
+              {% set risk = "zold" if best_pick.score >= 0.85 else ("sarga" if best_pick.score >= 0.69 else "piros") %}
+              <div class="match">
+                <div class="team">
+                  <div class="crest" aria-hidden="true">OK</div>
+                  <div style="min-width:0">
+                    <div class="tname">{{ best_pick.home_team }} vs {{ best_pick.away_team }}</div>
+                    <div class="small">{{ best_pick.market_label }} - Kezdes: {{ best_pick.commence_time[:16] }}</div>
+                  </div>
+                </div>
+                <div class="numbers">
+                  <span class="chip odds">Odds: {{ "%.2f"|format(best_pick.odds) if best_pick.odds is not none else "-" }}</span>
+                  <span class="chip score">Pont: {{ "%.2f"|format(best_pick.score) }}</span>
+                  <span class="chip risk {{ "green" if best_pick.score >= 0.85 else ("yellow" if best_pick.score >= 0.69 else "red") }}">Kockazat: {{ risk }}</span>
+                </div>
+              </div>
+
+              <div class="match">
+                <div class="team">
+                  <div class="crest" aria-hidden="true">STAT</div>
+                  <div style="min-width:0">
+                    <div class="tname">Valoszinuseg pontszam</div>
+                    <div class="small">Modell vs. implied probability</div>
+                  </div>
+                </div>
+                <div class="numbers" style="gap:12px">
+                  <div class="progress" aria-label="confidence">
+                    <div class="bar" style="width: {{ "%.0f"|format(best_pick.score * 100) }}%"></div>
+                  </div>
+                  <span class="chip">{{ "%.0f"|format(best_pick.score * 100) }}%</span>
+                </div>
+              </div>
+
+              <div style="color:rgba(255,255,255,.74); font-size:13px; line-height:1.45">
+                Indoklas: {{ ", ".join(_match_reasons(best_pick)) }}
+              </div>
+
+              <form method="post" action="/save_pick" class="inline">
+                <input type="hidden" name="sport_key" value="{{ best_pick.sport_key }}">
+                <input type="hidden" name="commence_time" value="{{ best_pick.commence_time }}">
+                <input type="hidden" name="home_team" value="{{ best_pick.home_team }}">
+                <input type="hidden" name="away_team" value="{{ best_pick.away_team }}">
+                <input type="hidden" name="market_key" value="{{ best_pick.market_key }}">
+                <input type="hidden" name="outcome" value="{{ best_pick.outcome }}">
+                <input type="hidden" name="line" value="{{ best_pick.line }}">
+                <input type="hidden" name="odds" value="{{ best_pick.odds }}">
+                <input type="hidden" name="score" value="{{ best_pick.score }}">
+                <input type="hidden" name="risk" value="{{ "green" if best_pick.score >= 0.85 else ("yellow" if best_pick.score >= 0.69 else "red") }}">
+                <button class="btn secondary" type="submit">Mentem</button>
+              </form>
+              {% else %}
+              <div class="match">
+                <div class="team">
+                  <div class="crest" aria-hidden="true">-</div>
+                  <div style="min-width:0">
+                    <div class="tname">Nincs elerheto tipp a 24 oras savban.</div>
+                    <div class="small">Probalj kesobb vagy frissits manualisan.</div>
+                  </div>
+                </div>
+              </div>
+              {% endif %}
+            </div>
+
+            <div class="kpi">
+              <div class="k">
+                <div class="label">Mai best pick</div>
+                <div class="val">{{ "%.2f"|format(best_pick.odds) if best_pick and best_pick.odds is not none else "-" }}</div>
+                <div class="hint">cel odds sav: 1.85-2.15</div>
+              </div>
+              <div class="k">
+                <div class="label">24h stabil szures</div>
+                <div class="val">ON</div>
+                <div class="hint">rangado / derbi kizaras</div>
+              </div>
+              <div class="k">
+                <div class="label">Ajanlott tet (Kelly-light)</div>
+                <div class="val">{{ ("%.1f"|format(stake_pct) ~ "%") if stake_pct is not none else "-" }}</div>
+                <div class="hint">bankroll menedzsment - max 2%</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card span2">
+        <div class="card-head">
+          <h2 class="card-title">Elo oddsok es AI tipp</h2>
+        </div>
+        <div class="card-body">
+          {% if odds %}
+          <div class="match" style="margin-bottom:10px">
+            <div class="team">
+              <div class="crest" aria-hidden="true">AI</div>
+              <div>
+                <div class="tname">{{ odds.home_team }} vs {{ odds.away_team }}</div>
+                <div class="small">1X2 piac</div>
+              </div>
+            </div>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Hazai</th>
+                <th>Donto</th>
+                <th>Vendeg</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>{{ "%.2f"|format(odds.home_odds) }}</strong></td>
+                <td><strong>{{ "%.2f"|format(odds.draw_odds) }}</strong></td>
+                <td><strong>{{ "%.2f"|format(odds.away_odds) }}</strong></td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="muted" style="margin-top:8px">AI javaslat: {{ odds.tip }}</div>
+          {% else %}
+          <div class="muted">Jelenleg nincs elerheto elo odds.</div>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="card span2">
+        <div class="card-head">
+          <h2 class="card-title">Legjobb 2-meccses kombi (24h, nem rangado, ~2.00)</h2>
+          <span class="badge">Cel odds: <strong>2.00 + 0.15</strong></span>
+        </div>
+        <div class="card-body">
+          {% if best_combo %}
+          <div class="muted" style="margin-bottom:10px">
+            Ossz odds: <strong>{{ "%.2f"|format(best_combo.combined_odds) }}</strong>
+            - Kockazat: <strong>{{ "zold" if best_combo.risk == "green" else ("sarga" if best_combo.risk == "yellow" else "piros") }}</strong>
+            {% if best_combo.forced %}- kenyszeritett valasztas{% endif %}
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Meccs</th>
+                <th>Piac</th>
+                <th>Kimenetel</th>
+                <th>Odds</th>
+                <th>Pont</th>
+                <th>Indok</th>
+                <th>Mentes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for pick in best_combo.matches %}
+              <tr>
+                <td>{{ pick.home_team }} vs {{ pick.away_team }}</td>
+                <td>{{ pick.market_label }}</td>
+                <td>{{ pick.outcome }}</td>
+                <td><strong>{{ "%.2f"|format(pick.odds) if pick.odds is not none else "-" }}</strong></td>
+                <td>{{ "%.2f"|format(pick.score) }}</td>
+                <td>{{ ", ".join(_match_reasons(pick)) }}</td>
+                <td>
+                  <form method="post" action="/save_pick">
+                    <input type="hidden" name="sport_key" value="{{ pick.sport_key }}">
+                    <input type="hidden" name="commence_time" value="{{ pick.commence_time }}">
+                    <input type="hidden" name="home_team" value="{{ pick.home_team }}">
+                    <input type="hidden" name="away_team" value="{{ pick.away_team }}">
+                    <input type="hidden" name="market_key" value="{{ pick.market_key }}">
+                    <input type="hidden" name="outcome" value="{{ pick.outcome }}">
+                    <input type="hidden" name="line" value="{{ pick.line }}">
+                    <input type="hidden" name="odds" value="{{ pick.odds }}">
+                    <input type="hidden" name="score" value="{{ pick.score }}">
+                    <input type="hidden" name="risk" value="{{ best_combo.risk }}">
+                    <button class="btn secondary" type="submit">Mentem</button>
+                  </form>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <div class="muted">Nincs ervenyes 2-meccses kombi a 2.00 + 0.15 savban.</div>
+          {% endif %}
+        </div>
+      </section>
+      <section class="card span2">
+        <div class="card-head">
+          {% if target_matches and target_matches[0].odds is none %}
+          <h2 class="card-title">Ket legeselyesebb meccs (odds nelkul)</h2>
+          {% else %}
+          <h2 class="card-title">Ket meccs 2.00 koruli oddssal</h2>
+          {% endif %}
+        </div>
+        <div class="card-body">
+          {% if target_matches %}
+          <table>
+            <thead>
+              <tr>
+                <th>Meccs</th>
+                <th>Piac</th>
+                <th>Kimenetel</th>
+                <th>Odds</th>
+                <th>Pont</th>
+                <th>Indok</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for pick in target_matches %}
+              <tr>
+                <td>{{ pick.home_team }} vs {{ pick.away_team }}</td>
+                <td>{{ pick.market_label }}</td>
+                <td>{{ pick.outcome }}</td>
+                <td><strong>{{ "%.2f"|format(pick.odds) if pick.odds is not none else "-" }}</strong></td>
+                <td>{{ "%.2f"|format(pick.score) }}</td>
+                <td>{{ ", ".join(_match_reasons(pick)) }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <div class="muted">Nincs meccs a szurokben.</div>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="card span2">
+        <div class="card-head">
+          <h2 class="card-title">Reszletes statisztika a kivalasztott meccshez</h2>
+        </div>
+        <div class="card-body">
+          {% if best_pick and best_pick.home_summary and best_pick.away_summary %}
+          <div class="tip-grid">
+            <div class="k">
+              <div class="label">{{ best_pick.home_summary.team }} - utobbi 5 meccs</div>
+              <div class="small">Gyozelmi arany: {{ "%.0f"|format(best_pick.home_summary.win_rate * 100) }}%</div>
+              <div class="small">Rugott gol atlag: {{ "%.2f"|format(best_pick.home_summary.goals_for_avg) }}</div>
+              <div class="small">Szogletek atlag: {{ "%.2f"|format(best_pick.home_summary.corners_avg) if best_pick.home_summary.corners_avg is not none else "n/a" }}</div>
+              <div class="small">Lapok atlag: {{ "%.2f"|format(best_pick.home_summary.cards_avg) if best_pick.home_summary.cards_avg is not none else "n/a" }}</div>
+              <div class="small">Tabella: {{ best_pick.home_standing.position if best_pick.home_standing else "n/a" }}. hely - {{ best_pick.home_standing.points if best_pick.home_standing else "n/a" }} pont</div>
+              <div class="small">Forras: {{ best_pick.home_summary.source }}</div>
+              <table>
+                <thead><tr><th>Datum</th><th>Ellenfel</th><th>Eredmeny</th></tr></thead>
+                <tbody>
+                  {% for row in best_pick.home_summary.matches %}
+                  <tr>
+                    <td>{{ row.date }}</td>
+                    <td>{{ row.opponent }}</td>
+                    <td><span class="pillscore">{{ row.score }}</span></td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            <div class="k">
+              <div class="label">{{ best_pick.away_summary.team }} - utobbi 5 meccs</div>
+              <div class="small">Gyozelmi arany: {{ "%.0f"|format(best_pick.away_summary.win_rate * 100) }}%</div>
+              <div class="small">Rugott gol atlag: {{ "%.2f"|format(best_pick.away_summary.goals_for_avg) }}</div>
+              <div class="small">Szogletek atlag: {{ "%.2f"|format(best_pick.away_summary.corners_avg) if best_pick.away_summary.corners_avg is not none else "n/a" }}</div>
+              <div class="small">Lapok atlag: {{ "%.2f"|format(best_pick.away_summary.cards_avg) if best_pick.away_summary.cards_avg is not none else "n/a" }}</div>
+              <div class="small">Tabella: {{ best_pick.away_standing.position if best_pick.away_standing else "n/a" }}. hely - {{ best_pick.away_standing.points if best_pick.away_standing else "n/a" }} pont</div>
+              <div class="small">Forras: {{ best_pick.away_summary.source }}</div>
+              <table>
+                <thead><tr><th>Datum</th><th>Ellenfel</th><th>Eredmeny</th></tr></thead>
+                <tbody>
+                  {% for row in best_pick.away_summary.matches %}
+                  <tr>
+                    <td>{{ row.date }}</td>
+                    <td>{{ row.opponent }}</td>
+                    <td><span class="pillscore">{{ row.score }}</span></td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          {% else %}
+          <div class="muted">Nincs elerheto statisztika a kivalasztott meccshez.</div>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="card span2">
+        <div class="card-head">
+          <h2 class="card-title">Hir-osszefoglalo (RSS)</h2>
+          <span class="badge">Forrasok: <strong>{{ rss_sources or "n/a" }}</strong></span>
+        </div>
+        <div class="card-body">
+          {% if rss_items %}
+          <div class="list">
+            {% for item in rss_items %}
+            <div class="row">
+              <div class="left">
+                <div class="icon" aria-hidden="true">RSS</div>
+                <div>
+                  <div class="name">{{ item.title }}</div>
+                  <div class="meta">{{ item.source }}</div>
+                </div>
+              </div>
+              <a class="btn secondary" href="{{ item.link }}" target="_blank" rel="noopener">Megnyitas</a>
+            </div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="muted">Nincs elerheto hir.</div>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2 class="card-title">Legutobbi meccsek</h2>
+          <span class="badge">Top ligak</span>
+        </div>
+        <div class="card-body">
+          <table>
+            <thead>
+              <tr>
+                <th>Hazai</th>
+                <th>Vendeg</th>
+                <th>Eredmeny</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for match in recent_matches %}
+              <tr>
+                <td>{{ match.home_team }}</td>
+                <td>{{ match.away_team }}</td>
+                <td><span class="pillscore">{{ match.score if match.score is defined else (match.home_score ~ "-" ~ match.away_score) }}</span></td>
+              </tr>
+              {% endfor %}
+              {% if not recent_matches %}
+              <tr>
+                <td colspan="3" class="muted">Nincs elerheto meccs.</td>
+              </tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2 class="card-title">Tabella</h2>
+          <span class="badge">Top 10</span>
+        </div>
+        <div class="card-body">
+          <table>
+            <thead>
+              <tr><th>Hely</th><th>Csapat</th><th>Pont</th></tr>
+            </thead>
+            <tbody>
+              {% for row in standings %}
+              <tr>
+                <td>{{ row.position }}</td>
+                <td>{{ row.team }}</td>
+                <td><span class="pillpts">{{ row.points }}</span></td>
+              </tr>
+              {% endfor %}
+              {% if not standings %}
+              <tr>
+                <td colspan="3" class="muted">Nincs elerheto tabella.</td>
+              </tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <main class="grid" id="panelSaved" style="display: {{ "grid" if active_tab == "saved" else "none" }}">
+      <section class="card span2">
+        <div class="card-head">
+          <h2 class="card-title">Mentett tippek</h2>
+          <span class="badge">Mentesek: <strong>{{ saved_picks|length }}</strong></span>
+        </div>
+        <div class="card-body">
+          {% if saved_picks %}
+          <table>
+            <thead>
+              <tr>
+                <th>Datum</th>
+                <th>Meccs</th>
+                <th>Piac</th>
+                <th>Kimenetel</th>
+                <th>Odds</th>
+                <th>Allapot</th>
+                <th>Eredmeny</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for pick in saved_picks %}
+              <tr>
+                <td>{{ pick.created_at }}</td>
+                <td>{{ pick.home_team }} vs {{ pick.away_team }}</td>
+                <td>{{ pick.market_label }}</td>
+                <td>{{ pick.outcome }}</td>
+                <td><strong>{{ "%.2f"|format(pick.odds) if pick.odds is not none else "-" }}</strong></td>
+                <td>{{ pick.status }}</td>
+                <td>{{ pick.result_label }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <div class="muted">Meg nincs mentett tipp.</div>
+          {% endif %}
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
