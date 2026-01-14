@@ -598,6 +598,7 @@ def _enrich_pick(pick: dict) -> dict:
     pick["standings"] = standings
     pick["home_standing"] = _standings_highlight(standings, pick.get("home_team", ""))
     pick["away_standing"] = _standings_highlight(standings, pick.get("away_team", ""))
+    pick["weather"] = _weather_details(pick.get("home_team", ""))
     return pick
 
 
@@ -662,6 +663,50 @@ def _fetch_rss_items() -> list[dict]:
     _RSS_CACHE["fetched_at"] = now
     _RSS_CACHE["items"] = items
     return items
+
+
+def _news_blocks(picks: list[dict], rss_items: list[dict], limit: int = 5) -> list[dict]:
+    blocks = []
+    if not picks or not rss_items:
+        return blocks
+    for pick in picks:
+        home = pick.get("home_team", "")
+        away = pick.get("away_team", "")
+        items = _news_items_for_match(home, away, rss_items, limit=limit)
+        summary = _news_summary_text(home, away, len(items))
+        blocks.append({"match": f"{home} vs {away}", "summary": summary, "items": items})
+    return blocks
+
+
+def _news_summary_text(home: str, away: str, count: int) -> str:
+    if count <= 0:
+        return "Nincs relevans hir a ket csapatrol."
+    return f"Osszefoglalo: {home} es {away} kapcsan {count} relevans hir talalhato."
+
+
+def _news_items_for_match(home: str, away: str, rss_items: list[dict], limit: int = 5) -> list[dict]:
+    if not rss_items:
+        return []
+    home_norm = _normalize_team_name(home)
+    away_norm = _normalize_team_name(away)
+    tokens = [t for t in re.split(r"\W+", f"{home_norm} {away_norm}") if len(t) > 2]
+    if not tokens:
+        return []
+    matched = []
+    seen = set()
+    for item in rss_items:
+        title = (item.get("title") or "").lower()
+        if not title:
+            continue
+        if any(tok in title for tok in tokens):
+            key = (item.get("title"), item.get("source"))
+            if key in seen:
+                continue
+            seen.add(key)
+            matched.append(item)
+        if len(matched) >= limit:
+            break
+    return matched
 
 
 def _team_tokens(team_name: str) -> list[str]:
@@ -737,8 +782,67 @@ def _geocode(name: str) -> dict | None:
 def _weather_factor(home_team: str) -> float:
     if not home_team:
         return 0.0
-    if home_team in _WEATHER_CACHE:
+    if home_team in _WEATHER_CACHE and "factor" in _WEATHER_CACHE[home_team]:
         return float(_WEATHER_CACHE[home_team]["factor"])
+    details = _weather_details(home_team)
+    if details and details.get("precip_prob_max") is not None:
+        high_rain = details["precip_prob_max"] >= 50
+        factor = -0.1 if high_rain else 0.0
+        _WEATHER_CACHE.setdefault(home_team, {})["factor"] = factor
+        return factor
+    _WEATHER_CACHE.setdefault(home_team, {})["factor"] = 0.0
+    return 0.0
+
+
+def _weather_details(home_team: str) -> dict:
+    if not home_team:
+        return {}
+    cached = _WEATHER_CACHE.get(home_team)
+    if cached and any(k in cached for k in ("precip_prob_max", "temp_min", "temp_max")):
+        return cached
+    overrides = _load_team_location_overrides()
+    if home_team in overrides:
+        override = overrides[home_team]
+        if "latitude" in override and "longitude" in override:
+            result = override
+        elif "lat" in override and "lon" in override:
+            result = {"latitude": override["lat"], "longitude": override["lon"]}
+        else:
+            result = None
+    else:
+        result = _geocode(f"{home_team} stadium") or _geocode(f"{home_team} football club") or _geocode(home_team)
+    if not result:
+        _WEATHER_CACHE[home_team] = {"precip_prob_max": None, "precip_max": None, "temp_min": None, "temp_max": None}
+        return _WEATHER_CACHE[home_team]
+    try:
+        response = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": result["latitude"],
+                "longitude": result["longitude"],
+                "hourly": "precipitation_probability,precipitation,temperature_2m",
+                "forecast_days": 1,
+            },
+            timeout=8,
+        )
+        if response.status_code == 200:
+            data = response.json()
+            hourly = data.get("hourly", {})
+            probs = hourly.get("precipitation_probability", []) or []
+            precs = hourly.get("precipitation", []) or []
+            temps = hourly.get("temperature_2m", []) or []
+            details = {
+                "precip_prob_max": max(probs) if probs else None,
+                "precip_max": max(precs) if precs else None,
+                "temp_min": min(temps) if temps else None,
+                "temp_max": max(temps) if temps else None,
+            }
+            _WEATHER_CACHE[home_team] = details
+            return details
+    except Exception:
+        pass
+    _WEATHER_CACHE[home_team] = {"precip_prob_max": None, "precip_max": None, "temp_min": None, "temp_max": None}
+    return _WEATHER_CACHE[home_team]
     overrides = _load_team_location_overrides()
     if home_team in overrides:
         override = overrides[home_team]
@@ -1162,16 +1266,31 @@ def _fetch_upcoming_fixtures_api_football(api_key: str, hours: int = 24, limit: 
         return []
     try:
         now, date_from, date_to = _fixture_window(hours)
-        response = requests.get(
-            "https://v3.football.api-sports.io/fixtures",
-            headers={"x-apisports-key": api_key},
-            params={"from": date_from, "to": date_to},
-            timeout=12,
-        )
-        if response.status_code != 200:
-            return []
         fixtures = []
-        for item in response.json().get("response", []):
+
+        def _fetch(params: dict) -> list[dict]:
+            response = requests.get(
+                "https://v3.football.api-sports.io/fixtures",
+                headers={"x-apisports-key": api_key},
+                params=params,
+                timeout=12,
+            )
+            if response.status_code != 200:
+                return []
+            data = response.json()
+            if data.get("errors"):
+                return []
+            return data.get("response", [])
+
+        params = {"date": date_from, "timezone": "UTC", "status": "NS"}
+        items = _fetch(params)
+        if date_to != date_from:
+            params2 = {"date": date_to, "timezone": "UTC", "status": "NS"}
+            items.extend(_fetch(params2))
+        if not items:
+            items = _fetch({"next": 100, "timezone": "UTC", "status": "NS"})
+
+        for item in items:
             fixture = item.get("fixture", {})
             teams = item.get("teams", {})
             league = item.get("league", {})
@@ -1215,7 +1334,7 @@ def _fetch_upcoming_fixtures_fd_all(token: str, hours: int = 24, limit: int = 40
         response = requests.get(
             "https://api.football-data.org/v4/matches",
             headers={"X-Auth-Token": token},
-            params={"status": "SCHEDULED", "dateFrom": date_from, "dateTo": date_to},
+            params={"status": "SCHEDULED,TIMED", "dateFrom": date_from, "dateTo": date_to},
             timeout=12,
         )
         if response.status_code != 200:
@@ -1265,7 +1384,7 @@ def _fetch_upcoming_fixtures_fd(token: str, comp_code: str, hours: int = 24, lim
         response = requests.get(
             f"https://api.football-data.org/v4/competitions/{comp_code}/matches",
             headers={"X-Auth-Token": token},
-            params={"status": "SCHEDULED", "dateFrom": date_from, "dateTo": date_to},
+            params={"status": "SCHEDULED,TIMED", "dateFrom": date_from, "dateTo": date_to},
             timeout=12,
         )
         if response.status_code != 200:
@@ -1440,6 +1559,7 @@ def _build_stat_only_picks(
             "news_score": news_score,
             "model_prob": model_prob,
             "implied_prob": None,
+            "risk": _risk_label(total),
         }
         picks.append(pick)
     picks.sort(key=lambda item: item["score"], reverse=True)
@@ -2065,6 +2185,7 @@ def dashboard():
     odds_data = None
     target_matches = []
     rss_items: list[dict] = []
+    news_blocks: list[dict] = []
     odds_count = 0
     odds_error = None
     best_pick = None
@@ -2298,6 +2419,7 @@ def dashboard():
     )
     if cached_updated_at and not rss_sources:
         rss_sources = cached.get("rss_sources", "") if cached else ""
+    news_blocks = _news_blocks(target_matches or ([best_pick] if best_pick else []), rss_items)
     return render_template_string(TEMPLATE,
                                   odds_configured=bool(config.odds_api_key),
                                   football_configured=bool(config.football_data_token),
@@ -2312,6 +2434,7 @@ def dashboard():
                                   _match_reasons=_match_reasons,
                                   rss_items=rss_items,
                                   rss_sources=rss_sources,
+                                  news_blocks=news_blocks,
                                   saved_picks=saved_picks,
                                   stake_pct=stake_pct,
                                   diag_counts=diag_counts,
