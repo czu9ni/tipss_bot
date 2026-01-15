@@ -1,7 +1,7 @@
 from flask import Flask, render_template_string, request, redirect, url_for
 from soccer_bot.config import load_config
 from soccer_bot.db import connect
-from soccer_bot.repo import get_team_stats, list_matches
+from soccer_bot.repo import Match, get_team_stats, list_matches
 from soccer_bot.offline_stats import build_team_summary
 from soccer_bot.scoring import match_points, table
 import html
@@ -188,6 +188,7 @@ _FD_COMP_CACHE: dict[str, dict[str, object]] = {}
 _FD_RECENT_CACHE: dict[str, dict[str, object]] = {}
 _FD_STANDINGS_CACHE: dict[str, dict[str, object]] = {}
 _FD_FIXTURES_CACHE: dict[str, dict[str, object]] = {}
+_FDCO_TABLE_CACHE: dict[str, dict[str, object]] = {}
 _AF_FIXTURES_CACHE: dict[str, dict[str, object]] = {}
 _ODDS_CACHE: dict[str, object] = {"ts": 0.0, "matches": [], "error": None}
 _TEAM_PPG_CACHE: dict[int, dict[str, object]] = {}
@@ -197,6 +198,8 @@ _TRANSLATE_CACHE: dict[str, dict[str, object]] = {}
 _TEAM_ID_CACHE: dict[str, dict[str, object]] = {}
 _FIXTURE_STATS_CACHE: dict[str, dict[str, object]] = {}
 _ODDS_MARKETS_DEFAULT = "h2h,totals,btts,team_totals,spreads,draw_no_bet,double_chance,alternate_totals,alternate_team_totals,alternate_spreads"
+LOCAL_DB_TTL_SECONDS = int(os.environ.get("LOCAL_DB_TTL_SECONDS", "300"))
+_LOCAL_DB_CACHE: dict[str, object] = {"matches": None, "standings": None, "ts": 0.0}
 _PICK_MIN_ODDS = float(os.environ.get("PICK_MIN_ODDS", "0"))
 _PICK_MAX_ODDS = float(os.environ.get("PICK_MAX_ODDS", "0"))
 _SERVER_STARTED_AT = datetime.now(timezone.utc)
@@ -284,6 +287,136 @@ def _cache_get(cache: dict[str, dict[str, object]], key: str, ttl: int) -> objec
 
 def _cache_set(cache: dict[str, dict[str, object]], key: str, data: object) -> None:
     cache[key] = {"ts": time.time(), "data": data}
+
+
+def _parse_iso_date(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except Exception:
+        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"):
+            try:
+                return datetime.strptime(value, fmt)
+            except Exception:
+                continue
+    return None
+
+
+def _local_db_matches() -> list[Match]:
+    cache = _LOCAL_DB_CACHE
+    now = time.time()
+    if cache["matches"] is None or now - float(cache["ts"]) > LOCAL_DB_TTL_SECONDS:
+        try:
+            db = connect(config.db_url)
+            db.ensure_schema()
+            cache["matches"] = list_matches(db)
+        except Exception:
+            cache["matches"] = []
+        cache["standings"] = None
+        cache["ts"] = now
+    return list(cache["matches"])
+
+
+def _local_team_matches(team_name: str, limit: int = 5) -> list[dict]:
+    norm = _normalize_team_name(team_name)
+    if not norm:
+        return []
+    rows: list[dict] = []
+    for match in _local_db_matches():
+        home_norm = _normalize_team_name(match.home_team)
+        away_norm = _normalize_team_name(match.away_team)
+        if norm not in (home_norm, away_norm):
+            continue
+        is_home = home_norm == norm
+        gf = match.home_score if is_home else match.away_score
+        ga = match.away_score if is_home else match.home_score
+        if gf is None or ga is None:
+            continue
+        opponent = match.away_team if is_home else match.home_team
+        if not opponent:
+            continue
+        if gf > ga:
+            result = "W"
+        elif gf == ga:
+            result = "D"
+        else:
+            result = "L"
+        rows.append(
+            {
+                "date": match.date or "",
+                "opponent": opponent,
+                "score": f"{gf}-{ga}",
+                "home": is_home,
+                "gf": gf,
+                "ga": ga,
+                "result": result,
+                "competition": "Local DB",
+                "competition_type": "Local",
+            }
+        )
+    rows.sort(key=lambda row: (_parse_iso_date(row.get("date")) or datetime.min), reverse=True)
+    return rows[:limit]
+
+
+def _record_local_result(table: dict[str, dict[str, object]], team_name: str, gf: int, ga: int) -> None:
+    norm = _normalize_team_name(team_name)
+    if not norm:
+        return
+    entry = table.setdefault(
+        norm,
+        {
+            "team": team_name,
+            "played": 0,
+            "points": 0,
+            "won": 0,
+            "draw": 0,
+            "lost": 0,
+            "goals_for": 0,
+            "goals_against": 0,
+            "position": None,
+        },
+    )
+    entry["team"] = entry.get("team") or team_name
+    entry["played"] += 1
+    entry["goals_for"] += gf
+    entry["goals_against"] += ga
+    if gf > ga:
+        entry["won"] += 1
+        entry["points"] += 3
+    elif gf == ga:
+        entry["draw"] += 1
+        entry["points"] += 1
+    else:
+        entry["lost"] += 1
+
+
+def _local_standings_data() -> dict[str, dict[str, object]]:
+    cached = _LOCAL_DB_CACHE.get("standings")
+    if isinstance(cached, dict):
+        return cached
+    table: dict[str, dict[str, object]] = {}
+    for match in _local_db_matches():
+        if match.home_team and match.away_team:
+            _record_local_result(table, match.home_team, match.home_score, match.away_score)
+            _record_local_result(table, match.away_team, match.away_score, match.home_score)
+    ordered = sorted(
+        table.values(),
+        key=lambda row: (
+            -float(row.get("points", 0)),
+            -float((row.get("goals_for", 0) or 0) - (row.get("goals_against", 0) or 0)),
+            -float(row.get("goals_for", 0) or 0),
+        ),
+    )
+    for idx, entry in enumerate(ordered, start=1):
+        entry["position"] = idx
+    _LOCAL_DB_CACHE["standings"] = table
+    return table
+
+
+def _local_table_entry(team_name: str) -> dict[str, object]:
+    standings = _local_standings_data()
+    return standings.get(_normalize_team_name(team_name), {})
 
 
 def _parse_iso_datetime(value: str | None) -> datetime | None:
@@ -899,6 +1032,11 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
     cached = _cache_get(_TEAM_SUMMARY_CACHE, cache_key, TEAM_SUMMARY_TTL_SECONDS)
     if isinstance(cached, dict):
         return cached
+    team_norm = _normalize_team_name(team_name)
+    comp_hint = _TEAM_COMP_HINT.get(team_norm)
+    league_code = _fdco_league_code(comp_hint)
+    season_year = _season_for_date(datetime.now(timezone.utc).date().isoformat())
+    season_code = _fdco_season_code(season_year)
     if team_id is None:
         team_id = _team_id_map().get(_normalize_name(team_name))
     if team_id is None:
@@ -907,43 +1045,49 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
     source = "api-football" if matches else "football-data"
     if not matches:
         matches = _team_recent_matches_fd(config.football_data_token, team_id, limit=5)
+    table_entry: dict[str, object] | None = None
+    if not matches and league_code:
+        matches, corners_avg, cards_avg, table_entry = _fdco_team_summary(team_name, league_code, season_year, limit=5)
+        if matches:
+            source = "football-data.co.uk"
+            total = max(1, len(matches))
+            wins = sum(1 for row in matches if row.get("result") == "W")
+            goals_for = sum(row.get("gf", 0) for row in matches)
+            btts_hits = sum(1 for row in matches if row.get("gf", 0) > 0 and row.get("ga", 0) > 0)
+            over25_hits = sum(1 for row in matches if (row.get("gf", 0) + row.get("ga", 0)) >= 3)
+            result = {
+                "team": team_name,
+                "win_rate": wins / total,
+                "goals_for_avg": goals_for / total,
+                "btts_rate": btts_hits / total,
+                "over25_rate": over25_hits / total,
+                "corners_avg": corners_avg,
+                "cards_avg": cards_avg,
+                "form_line": _form_line(matches),
+                "source": source,
+                "matches": [
+                    {
+                        "date": row.get("date", ""),
+                        "opponent": row.get("opponent", ""),
+                        "score": row.get("score", ""),
+                        "home": row.get("home", False),
+                        "competition": row.get("competition", ""),
+                        "competition_type": row.get("competition_type", ""),
+                    }
+                    for row in matches
+                ],
+                "table_entry": table_entry,
+            }
+            _cache_set(_TEAM_SUMMARY_CACHE, cache_key, result)
+            return result
     if not matches:
-        comp_hint = _TEAM_COMP_HINT.get(_normalize_team_name(team_name))
-        league_code = _fdco_league_code(comp_hint)
-        if league_code:
-            season_year = _season_for_date(datetime.now(timezone.utc).date().isoformat())
-            matches, corners_avg, cards_avg = _fdco_team_summary(team_name, league_code, season_year, limit=5)
-            if matches:
-                source = "football-data.co.uk"
-                total = max(1, len(matches))
-                wins = sum(1 for row in matches if row.get("result") == "W")
-                goals_for = sum(row.get("gf", 0) for row in matches)
-                btts_hits = sum(1 for row in matches if row.get("gf", 0) > 0 and row.get("ga", 0) > 0)
-                over25_hits = sum(1 for row in matches if (row.get("gf", 0) + row.get("ga", 0)) >= 3)
-                result = {
-                    "team": team_name,
-                    "win_rate": wins / total,
-                    "goals_for_avg": goals_for / total,
-                    "btts_rate": btts_hits / total,
-                    "over25_rate": over25_hits / total,
-                    "corners_avg": corners_avg,
-                    "cards_avg": cards_avg,
-                    "form_line": _form_line(matches),
-                    "source": source,
-                    "matches": [
-                        {
-                            "date": row.get("date", ""),
-                            "opponent": row.get("opponent", ""),
-                            "score": row.get("score", ""),
-                            "home": row.get("home", False),
-                            "competition": row.get("competition", ""),
-                            "competition_type": row.get("competition_type", ""),
-                        }
-                        for row in matches
-                    ],
-                }
-                _cache_set(_TEAM_SUMMARY_CACHE, cache_key, result)
-                return result
+        local_matches = _local_team_matches(team_name, limit=5)
+        if local_matches:
+            matches = local_matches
+            source = "local-db"
+            if table_entry is None:
+                table_entry = _local_table_entry(team_name)
+    if not matches:
         source = "n/a"
     total = max(1, len(matches))
     wins = sum(1 for row in matches if row.get("result") == "W")
@@ -988,6 +1132,9 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
                 corners_avg = fdco_corners
             if cards_avg is None and fdco_cards is not None:
                 cards_avg = fdco_cards
+    if table_entry is None and league_code:
+        table_data = _fdco_table_data(league_code, season_code)
+        table_entry = table_data.get(team_norm)
     result = {
         "team": team_name,
         "win_rate": wins / total,
@@ -1009,6 +1156,7 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
             }
             for row in matches
         ],
+        "table_entry": table_entry,
     }
     _cache_set(_TEAM_SUMMARY_CACHE, cache_key, result)
     return result
