@@ -9,14 +9,65 @@ import json
 import os
 import re
 import time
+import base64
+import hmac
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 import math
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 app = Flask(__name__)
 
+def _load_dotenv() -> None:
+    env_path = os.environ.get("SOCCER_ENV_PATH") or os.path.join(os.path.dirname(__file__), ".env")
+    if not os.path.exists(env_path):
+        return
+    try:
+        with open(env_path, "r", encoding="ascii") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except Exception:
+        pass
+
+
+_load_dotenv()
+
 config = load_config()
+
+BASIC_AUTH_USER = os.environ.get("BASIC_AUTH_USER", "")
+BASIC_AUTH_PASSWORD = os.environ.get("BASIC_AUTH_PASSWORD", "")
+ALLOWED_IPS = {ip.strip() for ip in os.environ.get("ALLOWED_IPS", "127.0.0.1,::1").split(",") if ip.strip()}
+FAST_MODE = os.environ.get("FAST_MODE", "0") == "1"
+AUTO_REFRESH_SECONDS = int(os.environ.get("AUTO_REFRESH_SECONDS", "900"))
+TRANSLATE_API_URL = os.environ.get("TRANSLATE_API_URL", "").strip()
+TRANSLATE_API_KEY = os.environ.get("TRANSLATE_API_KEY", "").strip()
+TRANSLATE_SOURCE = os.environ.get("TRANSLATE_SOURCE", "auto").strip()
+TRANSLATE_TARGET = os.environ.get("TRANSLATE_TARGET", "hu").strip()
+AF_STATS_ENABLED = os.environ.get("AF_STATS_ENABLED", "1") == "1"
+
+def _build_http_session() -> requests.Session:
+    session = requests.Session()
+    retries = Retry(
+        total=2,
+        backoff_factor=0.3,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=("GET",),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retries, pool_connections=20, pool_maxsize=20)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
+
+_HTTP = _build_http_session()
 
 RSS_FEEDS = [
     {"url": "http://feeds.bbci.co.uk/sport/football/rss.xml", "weight": 0.9, "label": "BBC Football"},
@@ -39,7 +90,7 @@ def _server_time_utc() -> datetime | None:
     key = config.api_football_key
     if key:
         try:
-            response = requests.get(
+            response = _HTTP.get(
                 "https://v3.football.api-sports.io/status",
                 headers={"x-apisports-key": key},
                 timeout=10,
@@ -67,7 +118,7 @@ def _server_time_utc() -> datetime | None:
     token = config.football_data_token
     if token:
         try:
-            response = requests.get(
+            response = _HTTP.get(
                 "https://api.football-data.org/v4/competitions",
                 headers={"X-Auth-Token": token},
                 timeout=10,
@@ -87,7 +138,7 @@ def _server_time_utc() -> datetime | None:
             pass
 
     try:
-        response = requests.get(
+        response = _HTTP.get(
             "https://api.open-meteo.com/v1/forecast",
             params={"latitude": 0, "longitude": 0, "current": "temperature_2m"},
             timeout=10,
@@ -117,14 +168,60 @@ _SPORTS_CACHE: dict[str, object] = {"fetched_at": 0.0, "keys": []}
 _ODDS_LAST_ERROR: str | None = None
 _CACHE_KEY = "latest_picks"
 SPORTS_CACHE_TTL_SECONDS = 3600
+FD_COMP_TTL_SECONDS = int(os.environ.get("FD_COMP_TTL_SECONDS", "21600"))
+FD_RECENT_TTL_SECONDS = int(os.environ.get("FD_RECENT_TTL_SECONDS", "600"))
+FD_STANDINGS_TTL_SECONDS = int(os.environ.get("FD_STANDINGS_TTL_SECONDS", "1800"))
+FD_FIXTURES_TTL_SECONDS = int(os.environ.get("FD_FIXTURES_TTL_SECONDS", "120"))
+AF_FIXTURES_TTL_SECONDS = int(os.environ.get("AF_FIXTURES_TTL_SECONDS", "120"))
+AF_STATS_TTL_SECONDS = int(os.environ.get("AF_STATS_TTL_SECONDS", "21600"))
+ODDS_CACHE_TTL_SECONDS = int(os.environ.get("ODDS_CACHE_TTL_SECONDS", "90"))
+REFRESH_COOLDOWN_SECONDS = int(os.environ.get("REFRESH_COOLDOWN_SECONDS", "30"))
+STAT_ONLY_MAX_FIXTURES = int(os.environ.get("STAT_ONLY_MAX_FIXTURES", "80"))
+TEAM_PPG_TTL_SECONDS = int(os.environ.get("TEAM_PPG_TTL_SECONDS", "3600"))
+TEAM_SUMMARY_TTL_SECONDS = int(os.environ.get("TEAM_SUMMARY_TTL_SECONDS", "21600"))
 _ELO_CACHE: dict[str, float] = {}
 _TEAM_ID_MAP: dict[str, int] | None = None
 _FORM_CACHE: dict[int, dict[str, float]] = {}
 _FORM_CACHE_TTL_SECONDS = 3600
 _STANDINGS_CACHE: dict[str, list[dict]] = {}
+_FD_COMP_CACHE: dict[str, dict[str, object]] = {}
+_FD_RECENT_CACHE: dict[str, dict[str, object]] = {}
+_FD_STANDINGS_CACHE: dict[str, dict[str, object]] = {}
+_FD_FIXTURES_CACHE: dict[str, dict[str, object]] = {}
+_AF_FIXTURES_CACHE: dict[str, dict[str, object]] = {}
+_ODDS_CACHE: dict[str, object] = {"ts": 0.0, "matches": [], "error": None}
+_TEAM_PPG_CACHE: dict[int, dict[str, object]] = {}
+_TEAM_SUMMARY_CACHE: dict[str, dict[str, object]] = {}
+_TEAM_RECENT_CACHE: dict[str, dict[str, object]] = {}
+_TRANSLATE_CACHE: dict[str, dict[str, object]] = {}
+_TEAM_ID_CACHE: dict[str, dict[str, object]] = {}
+_FIXTURE_STATS_CACHE: dict[str, dict[str, object]] = {}
 _ODDS_MARKETS_DEFAULT = "h2h,totals,btts,team_totals,spreads,draw_no_bet,double_chance,alternate_totals,alternate_team_totals,alternate_spreads"
 _PICK_MIN_ODDS = float(os.environ.get("PICK_MIN_ODDS", "0"))
 _PICK_MAX_ODDS = float(os.environ.get("PICK_MAX_ODDS", "0"))
+_SERVER_STARTED_AT = datetime.now(timezone.utc)
+_TEAM_COMP_HINT: dict[str, str] = {}
+FDCO_UK_TTL_SECONDS = int(os.environ.get("FDCO_UK_TTL_SECONDS", "21600"))
+FDCO_UK_LEAGUE_MAP = {
+    "PL": "E0",
+    "ELC": "E1",
+    "PD": "SP1",
+    "SA": "I1",
+    "BL1": "D1",
+    "FL1": "F1",
+    "DED": "N1",
+    "PPL": "P1",
+}
+FDCO_UK_COMP_NAMES = {
+    "E0": "Premier League",
+    "E1": "Championship",
+    "SP1": "Primera Division",
+    "I1": "Serie A",
+    "D1": "Bundesliga",
+    "F1": "Ligue 1",
+    "N1": "Eredivisie",
+    "P1": "Primeira Liga",
+}
 
 _TEMPLATE_PATHS = [
     os.path.join(os.path.dirname(__file__), "data", "ui_template.html"),
@@ -145,6 +242,60 @@ def _load_template() -> str:
 
 TEMPLATE = _load_template()
 
+
+def _is_authorized() -> bool:
+    if not BASIC_AUTH_USER or not BASIC_AUTH_PASSWORD:
+        return True
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Basic "):
+        return False
+    try:
+        decoded = base64.b64decode(auth.split(" ", 1)[1]).decode("utf-8")
+    except Exception:
+        return False
+    if ":" not in decoded:
+        return False
+    user, password = decoded.split(":", 1)
+    user_ok = hmac.compare_digest(user, BASIC_AUTH_USER)
+    pass_ok = hmac.compare_digest(password, BASIC_AUTH_PASSWORD)
+    return user_ok and pass_ok
+
+
+def _client_ip() -> str:
+    return request.remote_addr or ""
+
+
+@app.before_request
+def _security_gate() -> object:
+    if ALLOWED_IPS and _client_ip() not in ALLOWED_IPS:
+        return ("Forbidden", 403)
+    if not _is_authorized():
+        return ("Unauthorized", 401, {"WWW-Authenticate": 'Basic realm="tipss_bot"'})
+    return None
+
+def _cache_get(cache: dict[str, dict[str, object]], key: str, ttl: int) -> object | None:
+    item = cache.get(key)
+    if not item:
+        return None
+    if time.time() - float(item.get("ts", 0.0)) < ttl:
+        return item.get("data")
+    return None
+
+
+def _cache_set(cache: dict[str, dict[str, object]], key: str, data: object) -> None:
+    cache[key] = {"ts": time.time(), "data": data}
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
 
 
 def _strip_html(text: str) -> str:
@@ -224,23 +375,183 @@ def _normalize_name(name: str) -> str:
     return cleaned
 
 
+def _is_friendly_comp(name: str | None = None, code: str | None = None, league_type: str | None = None, sport_title: str | None = None) -> bool:
+    tokens = " ".join(value for value in [name, code, league_type, sport_title] if value)
+    text = tokens.lower()
+    keywords = [
+        "friendly",
+        "friendlies",
+        "club friendly",
+        "international friendly",
+        "intl friendly",
+        "test match",
+        "pre-season",
+        "preseason",
+        "training",
+        "exhibition",
+        "charity",
+        "testimonial",
+        "warm-up",
+        "warmup",
+        "practice",
+        "baratsagos",
+    ]
+    return any(keyword in text for keyword in keywords)
+
+
+def _match_competition(match: dict) -> str:
+    comp_name = str(match.get("comp_name") or "")
+    if comp_name:
+        return comp_name
+    comp = match.get("competition", {})
+    if isinstance(comp, dict):
+        name = comp.get("name")
+        if name:
+            return str(name)
+    sport_title = match.get("sport_title")
+    if sport_title:
+        return str(sport_title)
+    return str(match.get("comp_code") or match.get("sport_key") or "")
+
+
+def _normalize_comp(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def _normalize_team_tokens(value: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", "", value.lower())
+    for token in ("fc", "cf", "afc", "ac", "sc", "ud", "calcio"):
+        cleaned = cleaned.replace(token, "")
+    return cleaned
+
+
+def _fd_competition_map(competitions: list[dict]) -> dict[tuple[str, str], str]:
+    mapping: dict[tuple[str, str], str] = {}
+    for comp in competitions:
+        code = str(comp.get("code") or "")
+        name = str(comp.get("name") or "")
+        country = str(comp.get("area", {}).get("name") or "")
+        if code and name and country:
+            mapping[(_normalize_comp(name), _normalize_comp(country))] = code
+    return mapping
+
+
+def _season_for_date(value: str | None) -> int:
+    if not value:
+        return datetime.now(timezone.utc).year
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        year = dt.year
+        return year - 1 if dt.month < 7 else year
+    except Exception:
+        return datetime.now(timezone.utc).year
+
+
+def _fdco_season_code(season_year: int) -> str:
+    start = int(season_year)
+    return f"{str(start)[2:]}{str(start + 1)[2:]}"
+
+
+def _fdco_league_code(comp_code: str | None) -> str | None:
+    if not comp_code:
+        return None
+    return FDCO_UK_LEAGUE_MAP.get(str(comp_code))
+
+
+def _api_football_team_id(api_key: str, team_name: str) -> int | None:
+    if not api_key or not team_name:
+        return None
+    cache_key = _normalize_team_tokens(team_name)
+    cached = _cache_get(_TEAM_ID_CACHE, cache_key, 86400)
+    if isinstance(cached, int):
+        return cached
+    try:
+        response = _HTTP.get(
+            "https://v3.football.api-sports.io/teams",
+            headers={"x-apisports-key": api_key},
+            params={"search": team_name},
+            timeout=12,
+        )
+        if response.status_code != 200:
+            return None
+        items = response.json().get("response", [])
+        if not items:
+            return None
+        target = _normalize_team_tokens(team_name)
+        best_id = None
+        best_score = -1
+        for item in items:
+            team = item.get("team", {})
+            candidate_id = team.get("id")
+            if not isinstance(candidate_id, int):
+                continue
+            name = str(team.get("name") or "")
+            code = str(team.get("code") or "")
+            candidates = [name, code]
+            score = 0
+            for cand in candidates:
+                norm = _normalize_team_tokens(cand)
+                if not norm:
+                    continue
+                if norm == target:
+                    score = max(score, 3)
+                elif target and (norm in target or target in norm):
+                    score = max(score, 2)
+                elif cand and cand.lower() in team_name.lower():
+                    score = max(score, 1)
+            if score > best_score:
+                best_score = score
+                best_id = candidate_id
+        if best_id is None:
+            best = items[0].get("team", {})
+            best_id = best.get("id")
+        if isinstance(best_id, int):
+            _cache_set(_TEAM_ID_CACHE, cache_key, best_id)
+            return best_id
+    except Exception:
+        return None
+    return None
+
+
+def _fetch_competitions_fd(token: str) -> list[dict]:
+    cached = _cache_get(_FD_COMP_CACHE, "all", FD_COMP_TTL_SECONDS)
+    if isinstance(cached, list):
+        return cached
+    if not token:
+        return []
+    try:
+        response = _HTTP.get(
+            "https://api.football-data.org/v4/competitions",
+            headers={"X-Auth-Token": token},
+            timeout=12,
+        )
+        if response.status_code != 200:
+            return []
+        competitions = [comp for comp in response.json().get("competitions", []) if comp.get("code")]
+        _cache_set(_FD_COMP_CACHE, "all", competitions)
+        return competitions
+    except Exception:
+        return []
+
+
 def _team_id_map() -> dict[str, int]:
     global _TEAM_ID_MAP
     if _TEAM_ID_MAP is not None:
         return _TEAM_ID_MAP
     _TEAM_ID_MAP = {}
     try:
-        headers = {"X-Auth-Token": config.football_data_token}
-        response = requests.get("https://api.football-data.org/v4/competitions", headers=headers, timeout=15)
-        if response.status_code != 200:
+        competitions = _fetch_competitions_fd(config.football_data_token)
+        if not competitions:
             return _TEAM_ID_MAP
-        competitions = response.json().get("competitions", [])
+        headers = {"X-Auth-Token": config.football_data_token}
         max_comp = int(os.environ.get("FD_TEAMMAP_MAX_COMP", "10"))
         for comp in competitions[:max_comp]:
             comp_code = comp.get("code")
             if not comp_code:
                 continue
-            teams_resp = requests.get(
+            teams_resp = _HTTP.get(
                 f"https://api.football-data.org/v4/competitions/{comp_code}/teams",
                 headers=headers,
                 timeout=15,
@@ -355,7 +666,7 @@ def _team_form_stats(team_name: str, fallback: dict[str, float]) -> dict[str, fl
         return stats
     try:
         headers = {"X-Auth-Token": config.football_data_token}
-        response = requests.get(
+        response = _HTTP.get(
             f"https://api.football-data.org/v4/teams/{team_id}/matches",
             headers=headers,
             params={"status": "FINISHED", "limit": "6"},
@@ -394,7 +705,7 @@ def _fetch_clubelo(team_name: str) -> float:
     if norm in _ELO_CACHE:
         return _ELO_CACHE[norm]
     try:
-        response = requests.get(f"http://api.clubelo.com/{norm}", timeout=15)
+        response = _HTTP.get(f"http://api.clubelo.com/{norm}", timeout=15)
         if response.status_code != 200:
             return 1500.0
         lines = [ln.strip() for ln in response.text.splitlines() if ln.strip() and not ln.lower().startswith("date")]
@@ -521,7 +832,7 @@ def _fetch_standings(comp_code: str) -> list[dict]:
         return _STANDINGS_CACHE[comp_code]
     try:
         headers = {"X-Auth-Token": config.football_data_token}
-        response = requests.get(
+        response = _HTTP.get(
             f"https://api.football-data.org/v4/competitions/{comp_code}/standings",
             headers=headers,
             timeout=12,
@@ -544,46 +855,183 @@ def _fetch_standings(comp_code: str) -> list[dict]:
             points = row.get("points")
             position = row.get("position")
             if team and points is not None and position is not None:
-                rows.append({"position": position, "team": team, "points": points})
+                rows.append(
+                    {
+                        "position": position,
+                        "team": team,
+                        "points": points,
+                        "played": row.get("playedGames"),
+                        "won": row.get("won"),
+                        "draw": row.get("draw"),
+                        "lost": row.get("lost"),
+                        "goals_for": row.get("goalsFor"),
+                        "goals_against": row.get("goalsAgainst"),
+                    }
+                )
         _STANDINGS_CACHE[comp_code] = rows
         return rows
     except Exception:
         return []
 
 
-def _summary_dict(team_name: str) -> dict:
-    summary = build_team_summary(team_name, limit=5)
-    matches = []
-    for row in summary.matches:
-        home = row.home
-        away = row.away
-        is_home = _normalize_team_name(home) == _normalize_team_name(team_name)
-        gf = row.home_goals if is_home else row.away_goals
-        ga = row.away_goals if is_home else row.home_goals
-        opponent = away if is_home else home
-        matches.append(
+def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
+    if not team_name:
+        return {
+            "team": "",
+            "win_rate": 0.0,
+            "goals_for_avg": 0.0,
+            "corners_avg": None,
+            "cards_avg": None,
+            "source": "n/a",
+            "matches": [],
+        }
+    if FAST_MODE:
+        return {
+            "team": team_name,
+            "win_rate": 0.0,
+            "goals_for_avg": 0.0,
+            "corners_avg": None,
+            "cards_avg": None,
+            "source": "n/a",
+            "matches": [],
+        }
+    cache_key = f"{_normalize_team_name(team_name)}:{team_id or ''}"
+    cached = _cache_get(_TEAM_SUMMARY_CACHE, cache_key, TEAM_SUMMARY_TTL_SECONDS)
+    if isinstance(cached, dict):
+        return cached
+    if team_id is None:
+        team_id = _team_id_map().get(_normalize_name(team_name))
+    if team_id is None:
+        team_id = _api_football_team_id(config.api_football_key, team_name)
+    matches = _team_recent_matches_api_football(config.api_football_key, team_id, limit=5)
+    source = "api-football" if matches else "football-data"
+    if not matches:
+        matches = _team_recent_matches_fd(config.football_data_token, team_id, limit=5)
+    if not matches:
+        comp_hint = _TEAM_COMP_HINT.get(_normalize_team_name(team_name))
+        league_code = _fdco_league_code(comp_hint)
+        if league_code:
+            season_year = _season_for_date(datetime.now(timezone.utc).date().isoformat())
+            matches, corners_avg, cards_avg = _fdco_team_summary(team_name, league_code, season_year, limit=5)
+            if matches:
+                source = "football-data.co.uk"
+                total = max(1, len(matches))
+                wins = sum(1 for row in matches if row.get("result") == "W")
+                goals_for = sum(row.get("gf", 0) for row in matches)
+                btts_hits = sum(1 for row in matches if row.get("gf", 0) > 0 and row.get("ga", 0) > 0)
+                over25_hits = sum(1 for row in matches if (row.get("gf", 0) + row.get("ga", 0)) >= 3)
+                result = {
+                    "team": team_name,
+                    "win_rate": wins / total,
+                    "goals_for_avg": goals_for / total,
+                    "btts_rate": btts_hits / total,
+                    "over25_rate": over25_hits / total,
+                    "corners_avg": corners_avg,
+                    "cards_avg": cards_avg,
+                    "form_line": _form_line(matches),
+                    "source": source,
+                    "matches": [
+                        {
+                            "date": row.get("date", ""),
+                            "opponent": row.get("opponent", ""),
+                            "score": row.get("score", ""),
+                            "home": row.get("home", False),
+                            "competition": row.get("competition", ""),
+                            "competition_type": row.get("competition_type", ""),
+                        }
+                        for row in matches
+                    ],
+                }
+                _cache_set(_TEAM_SUMMARY_CACHE, cache_key, result)
+                return result
+        source = "n/a"
+    total = max(1, len(matches))
+    wins = sum(1 for row in matches if row.get("result") == "W")
+    goals_for = sum(row.get("gf", 0) for row in matches)
+    btts_hits = sum(1 for row in matches if row.get("gf", 0) > 0 and row.get("ga", 0) > 0)
+    over25_hits = sum(1 for row in matches if (row.get("gf", 0) + row.get("ga", 0)) >= 3)
+    corners_avg = None
+    cards_avg = None
+    if matches and config.api_football_key and AF_STATS_ENABLED:
+        corners_values = []
+        cards_values = []
+        for row in matches:
+            fixture_id = row.get("fixture_id")
+            team_id_value = row.get("team_id") or team_id
+            if not fixture_id or not team_id_value:
+                continue
+            try:
+                team_id_value = int(team_id_value)
+            except Exception:
+                continue
+            stats = _fixture_stats_api_football(config.api_football_key, fixture_id)
+            team_stats = stats.get(team_id_value) if stats else None
+            if not team_stats:
+                continue
+            corners = team_stats.get("corners")
+            cards = team_stats.get("cards")
+            if corners is not None:
+                corners_values.append(corners)
+            if cards is not None:
+                cards_values.append(cards)
+        if corners_values:
+            corners_avg = sum(corners_values) / len(corners_values)
+        if cards_values:
+            cards_avg = sum(cards_values) / len(cards_values)
+    if (corners_avg is None or cards_avg is None):
+        comp_hint = _TEAM_COMP_HINT.get(_normalize_team_name(team_name))
+        league_code = _fdco_league_code(comp_hint)
+        if league_code:
+            season_year = _season_for_date(datetime.now(timezone.utc).date().isoformat())
+            fdco_matches, fdco_corners, fdco_cards = _fdco_team_summary(team_name, league_code, season_year, limit=5)
+            if corners_avg is None and fdco_corners is not None:
+                corners_avg = fdco_corners
+            if cards_avg is None and fdco_cards is not None:
+                cards_avg = fdco_cards
+    result = {
+        "team": team_name,
+        "win_rate": wins / total,
+        "goals_for_avg": goals_for / total,
+        "btts_rate": btts_hits / total,
+        "over25_rate": over25_hits / total,
+        "corners_avg": corners_avg,
+        "cards_avg": cards_avg,
+        "form_line": _form_line(matches),
+        "source": source,
+        "matches": [
             {
-                "date": row.date,
-                "opponent": opponent,
-                "score": f"{gf}-{ga}",
-                "home": is_home,
+                "date": row.get("date", ""),
+                "opponent": row.get("opponent", ""),
+                "score": row.get("score", ""),
+                "home": row.get("home", False),
+                "competition": row.get("competition", ""),
+                "competition_type": row.get("competition_type", ""),
             }
-        )
-    return {
-        "team": summary.team,
-        "win_rate": summary.win_rate,
-        "goals_for_avg": summary.goals_for_avg,
-        "corners_avg": summary.corners_avg,
-        "cards_avg": summary.cards_avg,
-        "source": summary.source,
-        "matches": matches,
+            for row in matches
+        ],
     }
+    _cache_set(_TEAM_SUMMARY_CACHE, cache_key, result)
+    return result
 
 
-def _standings_highlight(standings: list[dict], team_name: str) -> dict:
+def _form_line(matches: list[dict]) -> str:
+    if not matches:
+        return ""
+    return "".join(row.get("result", "") or "-" for row in matches[:5])
+
+
+def _standings_highlight(standings: list[dict], team_name: str, team_id: int | None = None) -> dict:
+    if team_id is not None:
+        for row in standings:
+            if row.get("team_id") == team_id:
+                return row
     key = _normalize_team_name(team_name)
     for row in standings:
         if _normalize_team_name(row.get("team", "")) == key:
+            return row
+    key2 = _normalize_team_tokens(team_name)
+    for row in standings:
+        if key2 and key2 in _normalize_team_tokens(row.get("team", "")):
             return row
     return {}
 
@@ -591,13 +1039,27 @@ def _standings_highlight(standings: list[dict], team_name: str) -> dict:
 def _enrich_pick(pick: dict) -> dict:
     if not pick:
         return pick
-    pick["home_summary"] = _summary_dict(pick.get("home_team", ""))
-    pick["away_summary"] = _summary_dict(pick.get("away_team", ""))
-    comp_code = _sport_key_to_comp(pick.get("sport_key", ""))
-    standings = _fetch_standings(comp_code)
+    comp_hint = pick.get("fd_code") or pick.get("comp_code") or _sport_key_to_comp(pick.get("sport_key", ""))
+    if comp_hint and pick.get("home_team") and pick.get("away_team"):
+        _TEAM_COMP_HINT[_normalize_team_name(pick.get("home_team", ""))] = str(comp_hint)
+        _TEAM_COMP_HINT[_normalize_team_name(pick.get("away_team", ""))] = str(comp_hint)
+    pick["home_summary"] = _summary_dict(pick.get("home_team", ""), pick.get("home_id"))
+    pick["away_summary"] = _summary_dict(pick.get("away_team", ""), pick.get("away_id"))
+    standings = []
+    league_id = pick.get("comp_code") or pick.get("sport_key")
+    try:
+        league_id = int(league_id)
+    except Exception:
+        league_id = None
+    season = pick.get("season")
+    season = int(season) if isinstance(season, int) else _season_for_date(pick.get("commence_time"))
+    standings = _fetch_standings_api_football(config.api_football_key, league_id, season)
+    if not standings:
+        comp_code = pick.get("fd_code") or _sport_key_to_comp(pick.get("sport_key", ""))
+        standings = _fetch_standings(comp_code)
     pick["standings"] = standings
-    pick["home_standing"] = _standings_highlight(standings, pick.get("home_team", ""))
-    pick["away_standing"] = _standings_highlight(standings, pick.get("away_team", ""))
+    pick["home_standing"] = _standings_highlight(standings, pick.get("home_team", ""), pick.get("home_id"))
+    pick["away_standing"] = _standings_highlight(standings, pick.get("away_team", ""), pick.get("away_id"))
     pick["weather"] = _weather_details(pick.get("home_team", ""))
     return pick
 
@@ -636,6 +1098,8 @@ def _within_hours(match: dict, hours: int) -> bool:
 
 
 def _fetch_rss_items() -> list[dict]:
+    if FAST_MODE:
+        return []
     now = time.time()
     cached_at = float(_RSS_CACHE.get("fetched_at", 0.0))
     if now - cached_at < RSS_CACHE_TTL_SECONDS:
@@ -648,7 +1112,7 @@ def _fetch_rss_items() -> list[dict]:
             continue
         weight = float(source.get("weight", 0.5))
         try:
-            response = requests.get(url, timeout=8)
+            response = _HTTP.get(url, timeout=8)
             if response.status_code == 200:
                 for item in _parse_rss_items(response.text):
                     item["weight"] = weight
@@ -665,7 +1129,52 @@ def _fetch_rss_items() -> list[dict]:
     return items
 
 
-def _news_blocks(picks: list[dict], rss_items: list[dict], limit: int = 5) -> list[dict]:
+def _translate_text(text: str) -> str:
+    if not text:
+        return text
+    if not TRANSLATE_API_URL:
+        return text
+    cache_key = text.strip()
+    cached = _cache_get(_TRANSLATE_CACHE, cache_key, 86400)
+    if isinstance(cached, str):
+        return cached
+    payload = {
+        "q": text,
+        "source": TRANSLATE_SOURCE or "auto",
+        "target": TRANSLATE_TARGET or "hu",
+        "format": "text",
+    }
+    if TRANSLATE_API_KEY:
+        payload["api_key"] = TRANSLATE_API_KEY
+    try:
+        response = requests.post(TRANSLATE_API_URL, json=payload, timeout=12)
+        if response.status_code == 200:
+            data = response.json()
+            translated = data.get("translatedText") or data.get("translation") or text
+            _cache_set(_TRANSLATE_CACHE, cache_key, translated)
+            return translated
+    except Exception:
+        pass
+    return text
+
+
+def _news_summary_from_items(items: list[dict], limit: int = 8) -> str:
+    if not items:
+        return "Nincs relevans hir a ket csapatrol."
+    lines = []
+    for item in items[:limit]:
+        title = str(item.get("title_hu") or item.get("title") or "").strip()
+        summary = str(item.get("summary_hu") or item.get("summary") or "").strip()
+        if summary and summary != title:
+            lines.append(f"- {title}: {summary}")
+        else:
+            lines.append(f"- {title}")
+    return "\n".join(lines)
+
+
+def _news_blocks(picks: list[dict], rss_items: list[dict], limit: int = 10) -> list[dict]:
+    if FAST_MODE:
+        return []
     blocks = []
     if not picks or not rss_items:
         return blocks
@@ -674,7 +1183,23 @@ def _news_blocks(picks: list[dict], rss_items: list[dict], limit: int = 5) -> li
         away = pick.get("away_team", "")
         items = _news_items_for_match(home, away, rss_items, limit=limit)
         summary = _news_summary_text(home, away, len(items))
-        blocks.append({"match": f"{home} vs {away}", "summary": summary, "items": items})
+        translated_items = []
+        for item in items:
+            translated_items.append(
+                {
+                    **item,
+                    "title_hu": _translate_text(str(item.get("title", ""))),
+                    "summary_hu": _translate_text(str(item.get("summary", ""))),
+                }
+            )
+        blocks.append(
+            {
+                "match": f"{home} vs {away}",
+                "summary": _translate_text(summary),
+                "summary_hu": _news_summary_from_items(translated_items),
+                "items": translated_items,
+            }
+        )
     return blocks
 
 
@@ -684,21 +1209,27 @@ def _news_summary_text(home: str, away: str, count: int) -> str:
     return f"Osszefoglalo: {home} es {away} kapcsan {count} relevans hir talalhato."
 
 
-def _news_items_for_match(home: str, away: str, rss_items: list[dict], limit: int = 5) -> list[dict]:
+def _news_items_for_match(home: str, away: str, rss_items: list[dict], limit: int = 10) -> list[dict]:
     if not rss_items:
         return []
     home_norm = _normalize_team_name(home)
     away_norm = _normalize_team_name(away)
-    tokens = [t for t in re.split(r"\W+", f"{home_norm} {away_norm}") if len(t) > 2]
+    raw_tokens = [t for t in re.split(r"\W+", f"{home} {away}") if len(t) > 2]
+    tokens = [t.lower() for t in raw_tokens]
+    norm_tokens = [t for t in re.split(r"\W+", f"{home_norm} {away_norm}") if len(t) > 2]
+    tokens.extend(norm_tokens)
+    tokens = list({t for t in tokens if len(t) > 2})
     if not tokens:
         return []
     matched = []
     seen = set()
     for item in rss_items:
         title = (item.get("title") or "").lower()
-        if not title:
+        summary = (item.get("summary") or "").lower()
+        text = f"{title} {summary}".strip()
+        if not text:
             continue
-        if any(tok in title for tok in tokens):
+        if any(tok in text for tok in tokens):
             key = (item.get("title"), item.get("source"))
             if key in seen:
                 continue
@@ -763,7 +1294,7 @@ def _geocode(name: str) -> dict | None:
     if name in _GEOCODE_CACHE:
         return _GEOCODE_CACHE[name]
     try:
-        response = requests.get(
+        response = _HTTP.get(
             "https://geocoding-api.open-meteo.com/v1/search",
             params={"name": name, "count": 1, "language": "en", "format": "json"},
             timeout=8,
@@ -797,6 +1328,8 @@ def _weather_factor(home_team: str) -> float:
 def _weather_details(home_team: str) -> dict:
     if not home_team:
         return {}
+    if FAST_MODE:
+        return {"precip_prob_max": None, "precip_max": None, "temp_min": None, "temp_max": None}
     cached = _WEATHER_CACHE.get(home_team)
     if cached and any(k in cached for k in ("precip_prob_max", "temp_min", "temp_max")):
         return cached
@@ -815,7 +1348,7 @@ def _weather_details(home_team: str) -> dict:
         _WEATHER_CACHE[home_team] = {"precip_prob_max": None, "precip_max": None, "temp_min": None, "temp_max": None}
         return _WEATHER_CACHE[home_team]
     try:
-        response = requests.get(
+        response = _HTTP.get(
             "https://api.open-meteo.com/v1/forecast",
             params={
                 "latitude": result["latitude"],
@@ -858,7 +1391,7 @@ def _weather_details(home_team: str) -> dict:
         _WEATHER_CACHE[home_team] = {"factor": 0.0}
         return 0.0
     try:
-        response = requests.get(
+        response = _HTTP.get(
             "https://api.open-meteo.com/v1/forecast",
             params={
                 "latitude": result["latitude"],
@@ -896,6 +1429,7 @@ def _score_pick(
     away_team = match.get("away_team", "")
     if not home_team or not away_team:
         return None
+    competition = _match_competition(match)
     price = outcome.get("price")
     if not isinstance(price, (int, float)):
         return None
@@ -1083,10 +1617,29 @@ def _score_pick(
         + (1.0 - injury_index) * weights["injury"]
         + (1.0 - weather_factor) * weights["weather"]
     )
+    reason_parts = []
+    if elo_strength >= 0.65:
+        reason_parts.append("eros csapateroseg")
+    if form_strength >= 0.6:
+        reason_parts.append("jobb forma")
+    if market_diff >= 0.02:
+        reason_parts.append("ertek az oddsban")
+    if weather_factor >= 0.4:
+        reason_parts.append("idojaras kockazat")
+    if news_score >= 0.05:
+        reason_parts.append("pozitiv hirek")
+    if not reason_parts:
+        reason_parts.append("kiegyensulyozott jelek")
+    reason_text = "Magyarazat: " + ", ".join(reason_parts) + "."
+
     return {
         "match_key": _match_key(match),
         "home_team": home_team,
         "away_team": away_team,
+        "competition": competition,
+        "fd_code": match.get("fd_code"),
+        "home_id": match.get("home_id"),
+        "away_id": match.get("away_id"),
         "sport_key": str(match.get("sport_key") or ""),
         "commence_time": str(match.get("commence_time") or ""),
         "market_key": market_key,
@@ -1104,6 +1657,7 @@ def _score_pick(
         "news_score": news_score,
         "model_prob": model_prob,
         "implied_prob": implied_prob,
+        "explain_hu": reason_text,
     }
 
 
@@ -1151,6 +1705,12 @@ def _build_picks_for_match(
     table_scores: dict[str, float],
 ) -> list[dict]:
     picks: list[dict] = []
+    home_team = match.get("home_team", "")
+    away_team = match.get("away_team", "")
+    comp_code = _sport_key_to_comp(str(match.get("sport_key") or ""))
+    if comp_code and home_team and away_team:
+        _TEAM_COMP_HINT[_normalize_team_name(home_team)] = str(comp_code)
+        _TEAM_COMP_HINT[_normalize_team_name(away_team)] = str(comp_code)
     for market_key in _market_keys():
         outcomes = _average_market_outcomes(match, market_key)
         if not outcomes:
@@ -1175,8 +1735,12 @@ def _primary_competition(competitions: list[dict]) -> str | None:
 def _fetch_recent_matches_fd(token: str, comp_code: str, limit: int = 6) -> list[dict]:
     if not token or not comp_code:
         return []
+    cache_key = f"{comp_code}:{limit}"
+    cached = _cache_get(_FD_RECENT_CACHE, cache_key, FD_RECENT_TTL_SECONDS)
+    if isinstance(cached, list):
+        return cached
     try:
-        response = requests.get(
+        response = _HTTP.get(
             f"https://api.football-data.org/v4/competitions/{comp_code}/matches",
             headers={"X-Auth-Token": token},
             params={"status": "FINISHED", "limit": str(limit)},
@@ -1199,13 +1763,60 @@ def _fetch_recent_matches_fd(token: str, comp_code: str, limit: int = 6) -> list
                         "score": f"{home_score}-{away_score}",
                     }
                 )
-        return matches[:limit]
+        matches = matches[:limit]
+        _cache_set(_FD_RECENT_CACHE, cache_key, matches)
+        return matches
     except Exception:
         return []
 
 
-
-
+def _fetch_standings_api_football(api_key: str, league_id: int | None, season: int) -> list[dict]:
+    if not api_key or not league_id:
+        return []
+    cache_key = f"af:{league_id}:{season}"
+    cached = _cache_get(_FD_STANDINGS_CACHE, cache_key, FD_STANDINGS_TTL_SECONDS)
+    if isinstance(cached, list):
+        return cached
+    try:
+        response = _HTTP.get(
+            "https://v3.football.api-sports.io/standings",
+            headers={"x-apisports-key": api_key},
+            params={"league": str(league_id), "season": str(season)},
+            timeout=12,
+        )
+        if response.status_code != 200:
+            return []
+        data = response.json()
+        standings = data.get("response", [])
+        if not standings:
+            return []
+        table = standings[0].get("league", {}).get("standings", [])
+        rows = []
+        for group in table:
+            for row in group:
+                team = row.get("team", {}).get("name")
+                rank = row.get("rank")
+                points = row.get("points")
+                all_stats = row.get("all", {})
+                if team and rank is not None and points is not None:
+                    rows.append(
+                        {
+                            "position": rank,
+                            "team": team,
+                            "team_id": row.get("team", {}).get("id"),
+                            "points": points,
+                            "played": all_stats.get("played"),
+                            "won": all_stats.get("win"),
+                            "draw": all_stats.get("draw"),
+                            "lost": all_stats.get("lose"),
+                            "goals_for": all_stats.get("goals", {}).get("for"),
+                            "goals_against": all_stats.get("goals", {}).get("against"),
+                        }
+                    )
+        _cache_set(_FD_STANDINGS_CACHE, cache_key, rows)
+        return rows
+    except Exception:
+        return []
 
 
 
@@ -1240,14 +1851,16 @@ def _fixture_window(hours: int) -> tuple[datetime, str, str]:
     if override:
         try:
             base = datetime.fromisoformat(override).replace(tzinfo=timezone.utc)
+            source = "override"
         except Exception:
             base = datetime.now(timezone.utc)
+            source = "system"
     else:
         base = datetime.now(timezone.utc)
+        source = "system"
 
-    # If system clock looks wrong, try API-Football server time
-    source = "system"
-    if base.year < 2020 or base.year > 2025:
+    # Optional override to force server time when needed.
+    if not override and os.environ.get("FORCE_SERVER_TIME", "") == "1":
         server_time = _server_time_utc()
         if server_time:
             base = server_time
@@ -1264,12 +1877,16 @@ def _fixture_window(hours: int) -> tuple[datetime, str, str]:
 def _fetch_upcoming_fixtures_api_football(api_key: str, hours: int = 24, limit: int = 40) -> list[dict]:
     if not api_key:
         return []
+    cache_key = f"{hours}:{limit}"
+    cached = _cache_get(_AF_FIXTURES_CACHE, cache_key, AF_FIXTURES_TTL_SECONDS)
+    if isinstance(cached, list):
+        return cached
     try:
         now, date_from, date_to = _fixture_window(hours)
         fixtures = []
 
         def _fetch(params: dict) -> list[dict]:
-            response = requests.get(
+            response = _HTTP.get(
                 "https://v3.football.api-sports.io/fixtures",
                 headers={"x-apisports-key": api_key},
                 params=params,
@@ -1311,11 +1928,19 @@ def _fetch_upcoming_fixtures_api_football(api_key: str, hours: int = 24, limit: 
             if not home_name or not away_name:
                 continue
             comp_code = league.get("id") or league.get("name") or ""
+            comp_name = league.get("name") or ""
+            comp_country = league.get("country") or ""
+            comp_season = league.get("season")
+            if _is_friendly_comp(comp_name, str(comp_code), league.get("type")):
+                continue
             fixtures.append(
                 {
                     "id": fixture.get("id"),
                     "sport_key": str(comp_code),
                     "comp_code": str(comp_code),
+                    "comp_name": str(comp_name),
+                    "comp_country": str(comp_country),
+                    "season": comp_season,
                     "commence_time": utc_date,
                     "home_team": home_name,
                     "away_team": away_name,
@@ -1323,15 +1948,21 @@ def _fetch_upcoming_fixtures_api_football(api_key: str, hours: int = 24, limit: 
                     "away_id": away.get("id"),
                 }
             )
-        return fixtures[:limit]
+        fixtures = fixtures[:limit]
+        _cache_set(_AF_FIXTURES_CACHE, cache_key, fixtures)
+        return fixtures
     except Exception:
         return []
 def _fetch_upcoming_fixtures_fd_all(token: str, hours: int = 24, limit: int = 40) -> list[dict]:
     if not token:
         return []
+    cache_key = f"all:{hours}:{limit}"
+    cached = _cache_get(_FD_FIXTURES_CACHE, cache_key, FD_FIXTURES_TTL_SECONDS)
+    if isinstance(cached, list):
+        return cached
     try:
         now, date_from, date_to = _fixture_window(hours)
-        response = requests.get(
+        response = _HTTP.get(
             "https://api.football-data.org/v4/matches",
             headers={"X-Auth-Token": token},
             params={"status": "SCHEDULED,TIMED", "dateFrom": date_from, "dateTo": date_to},
@@ -1357,13 +1988,19 @@ def _fetch_upcoming_fixtures_fd_all(token: str, hours: int = 24, limit: int = 40
             away_name = away.get("name")
             comp = match.get("competition", {})
             comp_code = comp.get("code") or comp.get("id") or ""
+            comp_name = comp.get("name") or ""
+            comp_country = comp.get("area", {}).get("name") or ""
             if not home_name or not away_name:
+                continue
+            if _is_friendly_comp(comp_name, str(comp_code), comp.get("type")):
                 continue
             fixtures.append(
                 {
                     "id": match.get("id"),
                     "sport_key": comp_code,
                     "comp_code": comp_code,
+                    "comp_name": comp_name,
+                    "comp_country": comp_country,
                     "commence_time": utc_date,
                     "home_team": home_name,
                     "away_team": away_name,
@@ -1371,7 +2008,9 @@ def _fetch_upcoming_fixtures_fd_all(token: str, hours: int = 24, limit: int = 40
                     "away_id": away.get("id"),
                 }
             )
-        return fixtures[:limit]
+        fixtures = fixtures[:limit]
+        _cache_set(_FD_FIXTURES_CACHE, cache_key, fixtures)
+        return fixtures
     except Exception:
         return []
 
@@ -1379,9 +2018,13 @@ def _fetch_upcoming_fixtures_fd_all(token: str, hours: int = 24, limit: int = 40
 def _fetch_upcoming_fixtures_fd(token: str, comp_code: str, hours: int = 24, limit: int = 10) -> list[dict]:
     if not token or not comp_code:
         return []
+    cache_key = f"{comp_code}:{hours}:{limit}"
+    cached = _cache_get(_FD_FIXTURES_CACHE, cache_key, FD_FIXTURES_TTL_SECONDS)
+    if isinstance(cached, list):
+        return cached
     try:
         now, date_from, date_to = _fixture_window(hours)
-        response = requests.get(
+        response = _HTTP.get(
             f"https://api.football-data.org/v4/competitions/{comp_code}/matches",
             headers={"X-Auth-Token": token},
             params={"status": "SCHEDULED,TIMED", "dateFrom": date_from, "dateTo": date_to},
@@ -1407,11 +2050,15 @@ def _fetch_upcoming_fixtures_fd(token: str, comp_code: str, hours: int = 24, lim
             away_name = away.get("name")
             if not home_name or not away_name:
                 continue
+            if _is_friendly_comp(None, str(comp_code), match.get("competition", {}).get("type")):
+                continue
             fixtures.append(
                 {
                     "id": match.get("id"),
                     "sport_key": comp_code,
                     "comp_code": comp_code,
+                    "comp_name": match.get("competition", {}).get("name") or "",
+                    "comp_country": match.get("competition", {}).get("area", {}).get("name") or "",
                     "commence_time": utc_date,
                     "home_team": home_name,
                     "away_team": away_name,
@@ -1419,7 +2066,9 @@ def _fetch_upcoming_fixtures_fd(token: str, comp_code: str, hours: int = 24, lim
                     "away_id": away.get("id"),
                 }
             )
-        return fixtures[:limit]
+        fixtures = fixtures[:limit]
+        _cache_set(_FD_FIXTURES_CACHE, cache_key, fixtures)
+        return fixtures
     except Exception:
         return []
 
@@ -1427,8 +2076,11 @@ def _fetch_upcoming_fixtures_fd(token: str, comp_code: str, hours: int = 24, lim
 def _team_ppg_fd(token: str, team_id: int | None, limit: int = 6) -> float:
     if not token or not team_id:
         return 1.5
+    cached = _cache_get(_TEAM_PPG_CACHE, str(team_id), TEAM_PPG_TTL_SECONDS)
+    if isinstance(cached, (int, float)):
+        return float(cached)
     try:
-        response = requests.get(
+        response = _HTTP.get(
             f"https://api.football-data.org/v4/teams/{team_id}/matches",
             headers={"X-Auth-Token": token},
             params={"status": "FINISHED", "limit": str(limit)},
@@ -1466,9 +2118,336 @@ def _team_ppg_fd(token: str, team_id: int | None, limit: int = 6) -> float:
             count += 1
         if count == 0:
             return 1.5
-        return total_points / count
+        result = total_points / count
+        _cache_set(_TEAM_PPG_CACHE, str(team_id), result)
+        return result
     except Exception:
         return 1.5
+
+
+def _team_recent_matches_fd(token: str, team_id: int | None, limit: int = 5) -> list[dict]:
+    if not token or not team_id:
+        return []
+    cache_key = str(team_id)
+    cached = _cache_get(_TEAM_RECENT_CACHE, cache_key, TEAM_SUMMARY_TTL_SECONDS)
+    if isinstance(cached, list):
+        return cached[:limit]
+    try:
+        response = _HTTP.get(
+            f"https://api.football-data.org/v4/teams/{team_id}/matches",
+            headers={"X-Auth-Token": token},
+            params={"status": "FINISHED", "limit": str(limit)},
+            timeout=12,
+        )
+        if response.status_code != 200:
+            return []
+        rows = []
+        for match in response.json().get("matches", []):
+            utc_date = match.get("utcDate") or ""
+            date = utc_date.split("T", 1)[0] if "T" in utc_date else utc_date
+            comp = match.get("competition", {})
+            comp_name = comp.get("name") or ""
+            comp_code = comp.get("code") or ""
+            comp_type = comp.get("type") or ""
+            home = match.get("homeTeam", {}).get("name")
+            away = match.get("awayTeam", {}).get("name")
+            score = match.get("score", {}).get("fullTime", {})
+            home_score = score.get("home")
+            away_score = score.get("away")
+            if home is None or away is None or home_score is None or away_score is None:
+                continue
+            if _is_friendly_comp(comp_name, str(comp_code), comp_type):
+                continue
+            is_home = team_id == match.get("homeTeam", {}).get("id")
+            gf = home_score if is_home else away_score
+            ga = away_score if is_home else home_score
+            if gf > ga:
+                result = "W"
+            elif gf == ga:
+                result = "D"
+            else:
+                result = "L"
+            opponent = away if is_home else home
+            rows.append(
+                {
+                    "date": date,
+                    "opponent": opponent,
+                    "score": f"{gf}-{ga}",
+                    "home": is_home,
+                    "gf": gf,
+                    "ga": ga,
+                    "result": result,
+                    "competition": comp_name or comp_code,
+                    "competition_type": str(comp_type),
+                }
+            )
+        _cache_set(_TEAM_RECENT_CACHE, cache_key, rows)
+        return rows[:limit]
+    except Exception:
+        return []
+
+
+def _team_recent_matches_api_football(api_key: str, team_id: int | None, limit: int = 5) -> list[dict]:
+    if not api_key or not team_id:
+        return []
+    cache_key = f"af:{team_id}"
+    cached = _cache_get(_TEAM_RECENT_CACHE, cache_key, TEAM_SUMMARY_TTL_SECONDS)
+    if isinstance(cached, list):
+        return cached[:limit]
+    try:
+        season = _season_for_date(datetime.now(timezone.utc).date().isoformat())
+        response = _HTTP.get(
+            "https://v3.football.api-sports.io/fixtures",
+            headers={"x-apisports-key": api_key},
+            params={
+                "team": str(team_id),
+                "season": str(season),
+                "status": "FT",
+                "last": str(limit),
+                "timezone": "UTC",
+            },
+            timeout=12,
+        )
+        if response.status_code != 200:
+            return []
+        data = response.json()
+        errors = data.get("errors") or {}
+        items = data.get("response", [])
+        if errors.get("plan") and not items:
+            # Free plan workaround: use a date range and pick latest results.
+            to_date = datetime.now(timezone.utc).date()
+            from_date = (to_date - timedelta(days=180)).isoformat()
+            season = _season_for_date(to_date.isoformat())
+            response = _HTTP.get(
+                "https://v3.football.api-sports.io/fixtures",
+                headers={"x-apisports-key": api_key},
+                params={
+                    "team": str(team_id),
+                    "season": str(season),
+                    "status": "FT",
+                    "from": from_date,
+                    "to": to_date.isoformat(),
+                    "timezone": "UTC",
+                },
+                timeout=12,
+            )
+            if response.status_code != 200:
+                return []
+            items = response.json().get("response", [])
+        rows = []
+        for item in items:
+            fixture = item.get("fixture", {})
+            teams = item.get("teams", {})
+            league = item.get("league", {})
+            goals = item.get("goals", {})
+            utc_date = fixture.get("date") or ""
+            date = utc_date.split("T", 1)[0] if "T" in utc_date else utc_date
+            comp_name = str(league.get("name") or "")
+            comp_type = str(league.get("type") or "")
+            comp_id = league.get("id") or ""
+            if _is_friendly_comp(comp_name, str(comp_id), comp_type):
+                continue
+            home = (teams.get("home") or {}).get("name")
+            away = (teams.get("away") or {}).get("name")
+            home_id = (teams.get("home") or {}).get("id")
+            away_id = (teams.get("away") or {}).get("id")
+            home_score = goals.get("home")
+            away_score = goals.get("away")
+            if home is None or away is None or home_score is None or away_score is None:
+                continue
+            is_home = team_id == home_id
+            gf = home_score if is_home else away_score
+            ga = away_score if is_home else home_score
+            if gf > ga:
+                result = "W"
+            elif gf == ga:
+                result = "D"
+            else:
+                result = "L"
+            opponent = away if is_home else home
+            rows.append(
+                {
+                    "date": date,
+                    "opponent": opponent,
+                    "score": f"{gf}-{ga}",
+                    "home": is_home,
+                    "gf": gf,
+                    "ga": ga,
+                    "result": result,
+                    "competition": comp_name,
+                    "competition_type": comp_type,
+                    "fixture_id": fixture.get("id"),
+                    "team_id": team_id,
+                }
+            )
+        rows.sort(key=lambda r: r.get("date", ""), reverse=True)
+        _cache_set(_TEAM_RECENT_CACHE, cache_key, rows)
+        return rows[:limit]
+    except Exception:
+        return []
+
+
+def _stat_value(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        cleaned = value.strip().replace("%", "")
+        try:
+            return float(cleaned)
+        except Exception:
+            return None
+    return None
+
+
+def _fixture_stats_api_football(api_key: str, fixture_id: int | None) -> dict[int, dict[str, float]]:
+    if not api_key or not fixture_id or not AF_STATS_ENABLED:
+        return {}
+    cache_key = f"fixture:{fixture_id}"
+    cached = _cache_get(_FIXTURE_STATS_CACHE, cache_key, AF_STATS_TTL_SECONDS)
+    if isinstance(cached, dict):
+        return cached
+    try:
+        response = _HTTP.get(
+            "https://v3.football.api-sports.io/fixtures/statistics",
+            headers={"x-apisports-key": api_key},
+            params={"fixture": str(fixture_id)},
+            timeout=12,
+        )
+        if response.status_code != 200:
+            return {}
+        data = response.json()
+        items = data.get("response", [])
+        team_stats: dict[int, dict[str, float]] = {}
+        for entry in items:
+            team = entry.get("team", {})
+            team_id = team.get("id")
+            if not isinstance(team_id, int):
+                continue
+            stats = entry.get("statistics", [])
+            corners = None
+            cards = 0.0
+            cards_found = False
+            for stat in stats:
+                stat_type = str(stat.get("type") or "")
+                val = _stat_value(stat.get("value"))
+                if not stat_type:
+                    continue
+                if stat_type.lower() in ("corner kicks", "corners"):
+                    corners = val
+                if stat_type.lower() in ("yellow cards", "red cards", "cards"):
+                    if val is not None:
+                        cards += val
+                        cards_found = True
+            team_stats[team_id] = {
+                "corners": corners,
+                "cards": cards if cards_found else None,
+            }
+        _cache_set(_FIXTURE_STATS_CACHE, cache_key, team_stats)
+        return team_stats
+    except Exception:
+        return {}
+
+
+def _fdco_fetch_csv(league_code: str, season_code: str) -> list[dict]:
+    cache_key = f"{league_code}:{season_code}"
+    cached = _cache_get(_FD_RECENT_CACHE, cache_key, FDCO_UK_TTL_SECONDS)
+    if isinstance(cached, list):
+        return cached
+    url = f"https://www.football-data.co.uk/mmz4281/{season_code}/{league_code}.csv"
+    try:
+        response = _HTTP.get(url, timeout=12)
+        if response.status_code != 200:
+            return []
+        text = response.text
+        import csv
+        reader = csv.DictReader(text.splitlines())
+        rows = [row for row in reader]
+        _cache_set(_FD_RECENT_CACHE, cache_key, rows)
+        return rows
+    except Exception:
+        return []
+
+
+def _fdco_parse_date(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value.strip(), "%d/%m/%y").replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _fdco_team_summary(team_name: str, league_code: str, season_year: int, limit: int = 5) -> tuple[list[dict], float | None, float | None]:
+    season_code = _fdco_season_code(season_year)
+    rows = _fdco_fetch_csv(league_code, season_code)
+    if not rows:
+        return [], None, None
+    team_norm = _normalize_team_name(team_name)
+    matches = []
+    for row in rows:
+        home = str(row.get("HomeTeam") or "")
+        away = str(row.get("AwayTeam") or "")
+        if not home or not away:
+            continue
+        if _normalize_team_name(home) != team_norm and _normalize_team_name(away) != team_norm:
+            continue
+        date_raw = str(row.get("Date") or "")
+        date_dt = _fdco_parse_date(date_raw)
+        date = date_dt.date().isoformat() if date_dt else ""
+        home_goals = row.get("FTHG")
+        away_goals = row.get("FTAG")
+        try:
+            home_goals = int(home_goals)
+            away_goals = int(away_goals)
+        except Exception:
+            continue
+        is_home = _normalize_team_name(home) == team_norm
+        gf = home_goals if is_home else away_goals
+        ga = away_goals if is_home else home_goals
+        if gf > ga:
+            result = "W"
+        elif gf == ga:
+            result = "D"
+        else:
+            result = "L"
+        opponent = away if is_home else home
+        corners = None
+        cards = None
+        try:
+            corners = int(row.get("HC") if is_home else row.get("AC"))
+        except Exception:
+            corners = None
+        try:
+            yellow = int(row.get("HY") if is_home else row.get("AY"))
+            red = int(row.get("HR") if is_home else row.get("AR"))
+            cards = yellow + red
+        except Exception:
+            cards = None
+        matches.append(
+            {
+                "date": date,
+                "opponent": opponent,
+                "score": f"{gf}-{ga}",
+                "home": is_home,
+                "gf": gf,
+                "ga": ga,
+                "result": result,
+                "competition": FDCO_UK_COMP_NAMES.get(league_code, league_code),
+                "competition_type": "League",
+                "corners": corners,
+                "cards": cards,
+            }
+        )
+    matches = [m for m in matches if m.get("date")]
+    matches.sort(key=lambda m: m.get("date", ""), reverse=True)
+    matches = matches[:limit]
+    corners_values = [m["corners"] for m in matches if m.get("corners") is not None]
+    cards_values = [m["cards"] for m in matches if m.get("cards") is not None]
+    corners_avg = sum(corners_values) / len(corners_values) if corners_values else None
+    cards_avg = sum(cards_values) / len(cards_values) if cards_values else None
+    return matches, corners_avg, cards_avg
 
 
 def _table_scores_from_standings(standings: list[dict]) -> dict[str, float]:
@@ -1493,8 +2472,13 @@ def _build_stat_only_picks(
         away_team = match.get("away_team", "")
         if not home_team or not away_team:
             continue
+        if comp_code:
+            _TEAM_COMP_HINT[_normalize_team_name(home_team)] = str(comp_code)
+            _TEAM_COMP_HINT[_normalize_team_name(away_team)] = str(comp_code)
         if _is_rivalry(home_team, away_team):
             continue
+        match_news_items = _news_items_for_match(home_team, away_team, news_items, limit=8)
+        news_count = len(match_news_items)
         elo_home = _fetch_clubelo(home_team)
         elo_away = _fetch_clubelo(away_team)
         elo_diff = max(-1.0, min(1.0, (elo_home - elo_away) / 400.0))
@@ -1505,31 +2489,62 @@ def _build_stat_only_picks(
         table_away = table_scores.get(away_team, 0.5)
         table_diff = max(-1.0, min(1.0, table_home - table_away))
 
+        home_summary = _summary_dict(home_team, match.get("home_id"))
+        away_summary = _summary_dict(away_team, match.get("away_id"))
+        btts_rate = (home_summary.get("btts_rate", 0.0) + away_summary.get("btts_rate", 0.0)) / 2.0
+        over25_rate = (home_summary.get("over25_rate", 0.0) + away_summary.get("over25_rate", 0.0)) / 2.0
+        home_form = str(home_summary.get("form_line") or "")
+        away_form = str(away_summary.get("form_line") or "")
+        home_row = _standings_highlight(comp_standings, home_team, match.get("home_id"))
+        away_row = _standings_highlight(comp_standings, away_team, match.get("away_id"))
+        home_pos = home_row.get("position") if home_row else None
+        away_pos = away_row.get("position") if away_row else None
+
         p_home, p_draw, p_away = _model_probs(elo_diff, form_diff)
-        if p_home >= p_draw and p_home >= p_away:
+        market_key = "h2h"
+        market_label = "1X2 (odds nelkul)"
+        if btts_rate >= 0.6:
+            selection_label = "Mindket csapat golt szerez"
+            model_prob = btts_rate
+            market_key = "btts"
+            market_label = "GG (odds nelkul)"
+            elo_strength = 0.5
+            form_strength = 0.5
+            table_strength = 0.5
+            injury_index = (_injury_index(match_news_items, home_team) + _injury_index(match_news_items, away_team)) / 2.0
+        elif over25_rate >= 0.6:
+            selection_label = "Over 2.5 gol"
+            model_prob = over25_rate
+            market_key = "totals"
+            market_label = "Over 2.5 (odds nelkul)"
+            elo_strength = 0.5
+            form_strength = 0.5
+            table_strength = 0.5
+            injury_index = (_injury_index(match_news_items, home_team) + _injury_index(match_news_items, away_team)) / 2.0
+        elif p_home >= p_draw and p_home >= p_away:
             selection_label = "Hazai gyozelem"
             model_prob = p_home
             elo_strength = (elo_diff + 1.0) / 2.0
             form_strength = (form_diff + 1.0) / 2.0
             table_strength = (table_diff + 1.0) / 2.0
-            injury_index = _injury_index(news_items, home_team)
+            injury_index = _injury_index(match_news_items, home_team)
         elif p_away >= p_home and p_away >= p_draw:
             selection_label = "Vendeg gyozelem"
             model_prob = p_away
             elo_strength = ((-elo_diff) + 1.0) / 2.0
             form_strength = ((-form_diff) + 1.0) / 2.0
             table_strength = ((-table_diff) + 1.0) / 2.0
-            injury_index = _injury_index(news_items, away_team)
+            injury_index = _injury_index(match_news_items, away_team)
         else:
             selection_label = "Donto"
             model_prob = p_draw
             elo_strength = 0.5
             form_strength = 0.5
             table_strength = 0.5
-            injury_index = (_injury_index(news_items, home_team) + _injury_index(news_items, away_team)) / 2.0
+            injury_index = (_injury_index(match_news_items, home_team) + _injury_index(match_news_items, away_team)) / 2.0
 
         weather_factor = min(1.0, max(0.0, abs(_weather_factor(home_team)) * 10.0))
-        news_score = _news_factor(news_items, home_team, away_team)
+        news_score = _news_factor(match_news_items, home_team, away_team)
         form_strength = 0.7 * form_strength + 0.3 * table_strength
         total = (
             elo_strength * weights["elo"]
@@ -1538,14 +2553,49 @@ def _build_stat_only_picks(
             + (1.0 - weather_factor) * weights["weather"]
         )
 
+        reason_parts = []
+        if elo_strength >= 0.65:
+            reason_parts.append("eros csapateroseg")
+        if form_strength >= 0.6:
+            reason_parts.append("jobb forma")
+        if weather_factor >= 0.4:
+            reason_parts.append("idojaras kockazat")
+        if news_score >= 0.05:
+            reason_parts.append("pozitiv hirek")
+        if btts_rate >= 0.6:
+            reason_parts.append("gyakori GG a friss meccseken")
+        if over25_rate >= 0.6:
+            reason_parts.append("sok gol a friss meccseken")
+        if not reason_parts:
+            reason_parts.append("kiegyensulyozott jelek")
+        detail_parts = []
+        if home_form or away_form:
+            detail_parts.append(f"forma {home_form or 'n/a'} / {away_form or 'n/a'}")
+        if home_pos or away_pos:
+            detail_parts.append(f"tabella {home_pos or 'n/a'} vs {away_pos or 'n/a'}")
+        if btts_rate > 0:
+            detail_parts.append(f"GG {btts_rate:.0%}")
+        if over25_rate > 0:
+            detail_parts.append(f"Over2.5 {over25_rate:.0%}")
+        if news_count:
+            detail_parts.append(f"hirek {news_count} relevans")
+        reason_text = "Magyarazat: " + ", ".join(reason_parts) + "."
+        if detail_parts:
+            reason_text += " " + "; ".join(detail_parts) + "."
+
         pick = {
             "match_key": _match_key(match),
             "home_team": home_team,
             "away_team": away_team,
+            "competition": _match_competition(match),
+            "fd_code": match.get("fd_code"),
+            "home_id": match.get("home_id"),
+            "away_id": match.get("away_id"),
+            "season": match.get("season"),
             "sport_key": match.get("sport_key", ""),
             "commence_time": match.get("commence_time", ""),
-            "market_key": "h2h",
-            "market_label": "1X2 (odds nelkul)",
+            "market_key": market_key,
+            "market_label": market_label,
             "outcome": selection_label,
             "line": None,
             "odds": None,
@@ -1560,17 +2610,88 @@ def _build_stat_only_picks(
             "model_prob": model_prob,
             "implied_prob": None,
             "risk": _risk_label(total),
+            "explain_hu": reason_text,
         }
         picks.append(pick)
     picks.sort(key=lambda item: item["score"], reverse=True)
     return picks
 
 
+def _dedupe_fixtures(fixtures: list[dict]) -> list[dict]:
+    seen: set[tuple[str, str, str]] = set()
+    merged: list[dict] = []
+    for item in fixtures:
+        key = (
+            str(item.get("commence_time") or ""),
+            str(item.get("home_team") or ""),
+            str(item.get("away_team") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+    return merged
+
+
+def _fetch_public_fixtures(
+    competitions: list[dict],
+    window_hours: int,
+) -> tuple[list[dict], dict[str, list[dict]]]:
+    standings_by_comp: dict[str, list[dict]] = {}
+    fixtures: list[dict] = []
+    allowed_codes: set[str] = set()
+    allowed_pairs: set[tuple[str, str]] = set()
+    fd_map = _fd_competition_map(competitions)
+    for comp in competitions:
+        code = str(comp.get("code") or "")
+        name = str(comp.get("name") or "")
+        area = str(comp.get("area", {}).get("name") or "")
+        if code:
+            allowed_codes.add(code)
+        if name and area:
+            allowed_pairs.add((_normalize_comp(name), _normalize_comp(area)))
+    for comp in competitions:
+        code = comp.get("code")
+        if not code:
+            continue
+        standings_by_comp[code] = _fetch_standings_fd(config.football_data_token, code)
+        fixtures.extend(_fetch_upcoming_fixtures_fd(config.football_data_token, code, window_hours))
+    fixtures.extend(_fetch_upcoming_fixtures_fd_all(config.football_data_token, window_hours))
+    fixtures.extend(_fetch_upcoming_fixtures_api_football(config.api_football_key, window_hours))
+    fixtures = _dedupe_fixtures(fixtures)
+    if allowed_codes or allowed_pairs:
+        filtered = []
+        for item in fixtures:
+            comp_code = str(item.get("comp_code") or "")
+            comp_name = str(item.get("comp_name") or "")
+            comp_country = str(item.get("comp_country") or "")
+            fd_code = ""
+            if comp_code and comp_code in allowed_codes:
+                filtered.append(item)
+                continue
+            if comp_name and comp_country:
+                key = (_normalize_comp(comp_name), _normalize_comp(comp_country))
+                fd_code = fd_map.get(key, "")
+                if fd_code:
+                    item["fd_code"] = fd_code
+                    filtered.append(item)
+                    continue
+            # If we cannot match the competition to known list, skip.
+        fixtures = filtered
+    if STAT_ONLY_MAX_FIXTURES > 0 and len(fixtures) > STAT_ONLY_MAX_FIXTURES:
+        fixtures = fixtures[:STAT_ONLY_MAX_FIXTURES]
+    return fixtures, standings_by_comp
+
+
 def _fetch_standings_fd(token: str, comp_code: str, limit: int = 10) -> list[dict]:
     if not token or not comp_code:
         return []
+    cache_key = f"{comp_code}:{limit}"
+    cached = _cache_get(_FD_STANDINGS_CACHE, cache_key, FD_STANDINGS_TTL_SECONDS)
+    if isinstance(cached, list):
+        return cached
     try:
-        response = requests.get(
+        response = _HTTP.get(
             f"https://api.football-data.org/v4/competitions/{comp_code}/standings",
             headers={"X-Auth-Token": token},
             timeout=12,
@@ -1593,7 +2714,20 @@ def _fetch_standings_fd(token: str, comp_code: str, limit: int = 10) -> list[dic
             points = row.get("points")
             position = row.get("position")
             if team and points is not None and position is not None:
-                rows.append({"position": position, "team": team, "points": points})
+                rows.append(
+                    {
+                        "position": position,
+                        "team": team,
+                        "points": points,
+                        "played": row.get("playedGames"),
+                        "won": row.get("won"),
+                        "draw": row.get("draw"),
+                        "lost": row.get("lost"),
+                        "goals_for": row.get("goalsFor"),
+                        "goals_against": row.get("goalsAgainst"),
+                    }
+                )
+        _cache_set(_FD_STANDINGS_CACHE, cache_key, rows)
         return rows
     except Exception:
         return []
@@ -1804,7 +2938,7 @@ def _match_key(match: dict) -> str:
 def _fetch_scores(api_key: str, sport_key: str, days_from: int = 3) -> list[dict]:
     days_from = min(max(days_from, 1), 3)
     try:
-        response = requests.get(
+        response = _HTTP.get(
             f"https://api.the-odds-api.com/v4/sports/{sport_key}/scores",
             params={"apiKey": api_key, "daysFrom": days_from},
             timeout=10,
@@ -2086,7 +3220,7 @@ def _fetch_sports_keys(api_key: str) -> list[str]:
         return list(_SPORTS_CACHE.get("keys", []))
     keys: list[str] = []
     try:
-        response = requests.get(
+        response = _HTTP.get(
             "https://api.the-odds-api.com/v4/sports",
             params={"apiKey": api_key},
             timeout=10,
@@ -2109,6 +3243,11 @@ def _fetch_odds_matches(api_key: str, keys: list[str] | None = None) -> tuple[li
     global _ODDS_LAST_ERROR
     _ODDS_LAST_ERROR = None
     matches: list[dict] = []
+    use_cache = keys is None
+    if use_cache:
+        cached_age = time.time() - float(_ODDS_CACHE.get("ts", 0.0))
+        if cached_age < ODDS_CACHE_TTL_SECONDS:
+            return list(_ODDS_CACHE.get("matches", [])), _ODDS_CACHE.get("error")
     keys = keys or _fetch_sports_keys(api_key)
     max_sports = int(os.environ.get("ODDS_MAX_SPORTS", "0"))
     if max_sports > 0:
@@ -2116,7 +3255,7 @@ def _fetch_odds_matches(api_key: str, keys: list[str] | None = None) -> tuple[li
     markets = ",".join(_market_keys())
     for key in keys:
         try:
-            response = requests.get(
+            response = _HTTP.get(
                 f"https://api.the-odds-api.com/v4/sports/{key}/odds",
                 params={"apiKey": api_key, "regions": "eu", "markets": markets},
                 timeout=10,
@@ -2130,7 +3269,7 @@ def _fetch_odds_matches(api_key: str, keys: list[str] | None = None) -> tuple[li
                         _ODDS_LAST_ERROR = "Odds API kvota elfogyott"
                 except Exception:
                     pass
-                fallback = requests.get(
+                fallback = _HTTP.get(
                     f"https://api.the-odds-api.com/v4/sports/{key}/odds",
                     params={"apiKey": api_key, "regions": "eu", "markets": "h2h"},
                     timeout=10,
@@ -2146,6 +3285,10 @@ def _fetch_odds_matches(api_key: str, keys: list[str] | None = None) -> tuple[li
                         pass
         except Exception:
             pass
+    if use_cache:
+        _ODDS_CACHE["ts"] = time.time()
+        _ODDS_CACHE["matches"] = matches
+        _ODDS_CACHE["error"] = _ODDS_LAST_ERROR
     return matches, _ODDS_LAST_ERROR
 
 # HTML template
@@ -2159,6 +3302,29 @@ def dashboard():
 
     db = connect(config.db_url)
     db.ensure_schema()
+    cached = _load_cached_picks(db)
+    cached_updated_at = cached.get("updated_at") if cached else None
+    if not refresh_requested:
+        if not cached:
+            refresh_requested = True
+        elif AUTO_REFRESH_SECONDS > 0 and cached_updated_at:
+            cached_dt = _parse_iso_datetime(cached_updated_at)
+            if cached_dt:
+                age = (datetime.now(timezone.utc) - cached_dt).total_seconds()
+                if age >= AUTO_REFRESH_SECONDS:
+                    refresh_requested = True
+                if cached_dt < _SERVER_STARTED_AT:
+                    refresh_requested = True
+        elif cached_updated_at:
+            cached_dt = _parse_iso_datetime(cached_updated_at)
+            if cached_dt and cached_dt < _SERVER_STARTED_AT:
+                refresh_requested = True
+    if refresh_requested and cached_updated_at and REFRESH_COOLDOWN_SECONDS > 0:
+        cached_dt = _parse_iso_datetime(cached_updated_at)
+        if cached_dt:
+            age = (datetime.now(timezone.utc) - cached_dt).total_seconds()
+            if age < REFRESH_COOLDOWN_SECONDS:
+                refresh_requested = False
     matches = list_matches(db)
     points_map = table(matches)
     form_scores = _build_form_scores(matches)
@@ -2168,18 +3334,12 @@ def dashboard():
     competitions = []
     recent_matches = []
     standings = []
-    try:
-        headers = {"X-Auth-Token": config.football_data_token}
-        response = requests.get("https://api.football-data.org/v4/competitions", headers=headers, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            competitions = [comp for comp in data.get('competitions', []) if comp.get('code')]
-            primary = _primary_competition(competitions)
-            if primary:
-                recent_matches = _fetch_recent_matches_fd(config.football_data_token, primary)
-                standings = _fetch_standings_fd(config.football_data_token, primary)
-    except Exception:
-        pass
+    competitions = _fetch_competitions_fd(config.football_data_token)
+    allowed_codes = {str(comp.get("code") or "") for comp in competitions if comp.get("code")}
+    primary = _primary_competition(competitions)
+    if primary:
+        recent_matches = _fetch_recent_matches_fd(config.football_data_token, primary)
+        standings = _fetch_standings_fd(config.football_data_token, primary)
 
     # Fetch odds and tip
     odds_data = None
@@ -2190,9 +3350,9 @@ def dashboard():
     odds_error = None
     best_pick = None
     best_combo = None
-    cached_updated_at = None
     diag_counts = {"comp_24": 0, "all_24": 0, "api_football_24": 0, "window_from": "", "window_to": "", "window_source": "system"}
     if refresh_requested:
+        cached_updated_at = None
         try:
             diag_counts = _diagnostics_fixtures(config.football_data_token, competitions, window_hours)
             if not config.odds_api_key:
@@ -2200,31 +3360,11 @@ def dashboard():
                 data = []
                 eligible = []
                 rss_items = _fetch_rss_items()
-                standings_by_comp = {}
-                fixtures = []
-                for comp in competitions:
-                    code = comp.get("code")
-                    if not code:
-                        continue
-                    standings_by_comp[code] = _fetch_standings_fd(config.football_data_token, code)
-                    fixtures.extend(_fetch_upcoming_fixtures_fd(config.football_data_token, code, window_hours))
-                if not fixtures:
-                    fixtures = _fetch_upcoming_fixtures_fd_all(config.football_data_token, window_hours)
-                if not fixtures:
-                    fixtures = _fetch_upcoming_fixtures_api_football(config.api_football_key, window_hours)
+                fixtures, standings_by_comp = _fetch_public_fixtures(competitions, window_hours)
                 picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                 if not picks:
                     fallback_hours = 24
-                    fixtures = []
-                    for comp in competitions:
-                        code = comp.get("code")
-                        if not code:
-                            continue
-                        fixtures.extend(_fetch_upcoming_fixtures_fd(config.football_data_token, code, fallback_hours))
-                    if not fixtures:
-                        fixtures = _fetch_upcoming_fixtures_fd_all(config.football_data_token, fallback_hours)
-                    if not fixtures:
-                        fixtures = _fetch_upcoming_fixtures_api_football(config.api_football_key, fallback_hours)
+                    fixtures, standings_by_comp = _fetch_public_fixtures(competitions, fallback_hours)
                     picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                     if picks:
                         odds_error = "Odds API kulcs hianyzik (odds nelkuli ajanlas, 24 oras ablak)"
@@ -2254,31 +3394,11 @@ def dashboard():
                     if not odds_error:
                         odds_error = "Odds API adat nem elerheto (odds nelkuli ajanlas)"
                     rss_items = _fetch_rss_items()
-                    standings_by_comp = {}
-                    fixtures = []
-                    for comp in competitions:
-                        code = comp.get("code")
-                        if not code:
-                            continue
-                        standings_by_comp[code] = _fetch_standings_fd(config.football_data_token, code)
-                        fixtures.extend(_fetch_upcoming_fixtures_fd(config.football_data_token, code, window_hours))
-                    if not fixtures:
-                        fixtures = _fetch_upcoming_fixtures_fd_all(config.football_data_token, window_hours)
-                    if not fixtures:
-                        fixtures = _fetch_upcoming_fixtures_api_football(config.api_football_key, window_hours)
+                    fixtures, standings_by_comp = _fetch_public_fixtures(competitions, window_hours)
                     picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                     if not picks:
                         fallback_hours = 24
-                        fixtures = []
-                        for comp in competitions:
-                            code = comp.get("code")
-                            if not code:
-                                continue
-                            fixtures.extend(_fetch_upcoming_fixtures_fd(config.football_data_token, code, fallback_hours))
-                        if not fixtures:
-                            fixtures = _fetch_upcoming_fixtures_fd_all(config.football_data_token, fallback_hours)
-                        if not fixtures:
-                            fixtures = _fetch_upcoming_fixtures_api_football(config.api_football_key, fallback_hours)
+                        fixtures, standings_by_comp = _fetch_public_fixtures(competitions, fallback_hours)
                         picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                         if picks:
                             odds_error = "Odds API adat nem elerheto (24 oras ablak)"
@@ -2305,6 +3425,11 @@ def dashboard():
                     for match in data:
                         home_team = match.get("home_team", "")
                         away_team = match.get("away_team", "")
+                        if _is_friendly_comp(code=str(match.get("sport_key") or ""), sport_title=str(match.get("sport_title") or "")):
+                            continue
+                        comp_code = _sport_key_to_comp(str(match.get("sport_key") or ""))
+                        if allowed_codes and (not comp_code or comp_code not in allowed_codes):
+                            continue
                         if not _within_hours(match, window_hours):
                             continue
                         if _is_rivalry(home_team, away_team):
@@ -2406,7 +3531,6 @@ def dashboard():
             pass
         _settle_saved_picks(db, config.odds_api_key)
     else:
-        cached = _load_cached_picks(db)
         if cached:
             odds_data = cached.get("odds_data")
             best_pick = cached.get("best_pick")
@@ -2418,9 +3542,8 @@ def dashboard():
     saved_picks = _list_saved_picks(db)
     stake_pct = _stake_from_score(best_pick.get("score") if best_pick else None)
 
-    rss_sources = ", ".join(
-        sorted({item.get("source", "") for item in rss_items if item.get("source")})
-    )
+    configured_sources = ", ".join(sorted({item.get("label", "") for item in _load_rss_sources() if item.get("label")}))
+    rss_sources = configured_sources
     if cached_updated_at and not rss_sources:
         rss_sources = cached.get("rss_sources", "") if cached else ""
     news_blocks = _news_blocks(target_matches or ([best_pick] if best_pick else []), rss_items)
@@ -2438,6 +3561,7 @@ def dashboard():
                                   _match_reasons=_match_reasons,
                                   rss_items=rss_items,
                                   rss_sources=rss_sources,
+                                  configured_sources=configured_sources,
                                   news_blocks=news_blocks,
                                   saved_picks=saved_picks,
                                   stake_pct=stake_pct,
@@ -2446,6 +3570,15 @@ def dashboard():
                                   odds_error=odds_error,
                                   active_tab=active_tab,
                                   refresh_requested=refresh_requested)
+
+
+@app.route("/health")
+def health():
+    return {
+        "status": "ok",
+        "time": datetime.now(timezone.utc).isoformat(),
+        "fast_mode": FAST_MODE,
+    }
 
 
 @app.route("/save_pick", methods=["POST"])
@@ -2475,3 +3608,4 @@ def save_pick():
 if __name__ == '__main__':
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
     app.run(debug=debug)
+

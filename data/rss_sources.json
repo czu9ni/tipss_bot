@@ -1,5 +1,25 @@
 [
   {
+    "url": "https://m4sport.hu/feed/",
+    "weight": 0.95,
+    "label": "M4 Sport"
+  },
+  {
+    "url": "https://hirado.hu/rss/sport.xml",
+    "weight": 0.85,
+    "label": "Hirado Sport"
+  },
+  {
+    "url": "https://www.nemzetisport.hu/rss/",
+    "weight": 0.95,
+    "label": "Nemzeti Sport"
+  },
+  {
+    "url": "https://www.sportal.hu/rss/",
+    "weight": 0.7,
+    "label": "Sportal"
+  },
+  {
     "url": "http://feeds.bbci.co.uk/sport/football/rss.xml",
     "weight": 0.95,
     "label": "BBC Football"

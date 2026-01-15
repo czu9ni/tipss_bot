@@ -1,7 +1,7 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-soccer.db
-.pytest_cache/
 .env
-data/externals/
+soccer.db
+web.out.log
+web.err.log
