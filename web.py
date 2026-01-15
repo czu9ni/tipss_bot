@@ -225,6 +225,17 @@ FDCO_UK_COMP_NAMES = {
     "N1": "Eredivisie",
     "P1": "Primeira Liga",
 }
+FDCO_UK_COMP_COLUMNS = {
+    "team": ("Team", "team"),
+    "position": ("Pos", "Position", "Ranking"),
+    "points": ("Pts", "Points"),
+    "played": ("P", "Played"),
+    "won": ("W", "Won"),
+    "draw": ("D", "Draw"),
+    "lost": ("L", "Lost"),
+    "goals_for": ("F", "GoalsFor"),
+    "goals_against": ("A", "GoalsAgainst"),
+}
 
 _TEMPLATE_PATHS = [
     os.path.join(os.path.dirname(__file__), "data", "ui_template.html"),
@@ -1127,7 +1138,7 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
         league_code = _fdco_league_code(comp_hint)
         if league_code:
             season_year = _season_for_date(datetime.now(timezone.utc).date().isoformat())
-            fdco_matches, fdco_corners, fdco_cards = _fdco_team_summary(team_name, league_code, season_year, limit=5)
+            fdco_matches, fdco_corners, fdco_cards, _ = _fdco_team_summary(team_name, league_code, season_year, limit=5)
             if corners_avg is None and fdco_corners is not None:
                 corners_avg = fdco_corners
             if cards_avg is None and fdco_cards is not None:
@@ -2527,11 +2538,52 @@ def _fdco_parse_date(value: str) -> datetime | None:
         return None
 
 
-def _fdco_team_summary(team_name: str, league_code: str, season_year: int, limit: int = 5) -> tuple[list[dict], float | None, float | None]:
+def _stat_value_int(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _fdco_table_data(league_code: str, season_code: str) -> dict[str, dict[str, object]]:
+    cache_key = f"table:{league_code}:{season_code}"
+    cached = _cache_get(_FDCO_TABLE_CACHE, cache_key, FDCO_UK_TTL_SECONDS)
+    if isinstance(cached, dict):
+        return cached
+    rows = _fdco_fetch_csv(league_code, season_code)
+    table: dict[str, dict[str, object]] = {}
+    for row in rows:
+        team = row.get("HomeTeam") or row.get("AwayTeam") or row.get("Team") or ""
+        if not team:
+            continue
+        norm = _normalize_team_name(team)
+        if not norm:
+            continue
+        entry: dict[str, object] = {"team": team}
+        for key in ("position", "points", "played", "won", "draw", "lost", "goals_for", "goals_against"):
+            columns = FDCO_UK_COMP_COLUMNS.get(key, ())
+            value = None
+            for col in columns:
+                if col in row:
+                    value = _stat_value_int(row.get(col))
+                    if value is not None:
+                        break
+            if value is not None:
+                entry_key = key
+                entry[entry_key] = value
+        table[norm] = entry
+    _cache_set(_FDCO_TABLE_CACHE, cache_key, table)
+    return table
+
+
+
+def _fdco_team_summary(team_name: str, league_code: str, season_year: int, limit: int = 5) -> tuple[list[dict], float | None, float | None, dict[str, object] | None]:
     season_code = _fdco_season_code(season_year)
     rows = _fdco_fetch_csv(league_code, season_code)
     if not rows:
-        return [], None, None
+        return [], None, None, None
     team_norm = _normalize_team_name(team_name)
     matches = []
     for row in rows:
@@ -2595,7 +2647,8 @@ def _fdco_team_summary(team_name: str, league_code: str, season_year: int, limit
     cards_values = [m["cards"] for m in matches if m.get("cards") is not None]
     corners_avg = sum(corners_values) / len(corners_values) if corners_values else None
     cards_avg = sum(cards_values) / len(cards_values) if cards_values else None
-    return matches, corners_avg, cards_avg
+    table_entry = _fdco_table_data(league_code, season_code).get(team_norm)
+    return matches, corners_avg, cards_avg, table_entry
 
 
 def _table_scores_from_standings(standings: list[dict]) -> dict[str, float]:
