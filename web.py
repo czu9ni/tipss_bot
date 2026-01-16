@@ -251,6 +251,7 @@ FDCO_UK_COMP_COLUMNS = {
 }
 
 _TEMPLATE_PATHS = [
+    os.path.join(os.path.dirname(__file__), "data", "innovative_dashboard.html"),
     os.path.join(os.path.dirname(__file__), "data", "ui_template.html"),
     os.path.join(os.path.dirname(__file__), "..", "data", "ui_template.html"),
 ]
