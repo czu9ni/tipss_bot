@@ -547,11 +547,15 @@ def _background_refresh_loop() -> None:
         try:
             if not FAST_MODE:
                 _fetch_rss_items()
-            competitions = _fetch_competitions_fd(config.football_data_token)
-            if competitions:
-                _fetch_public_fixtures(competitions, 24)
-            if config.odds_api_key:
-                _fetch_odds_matches(config.odds_api_key)
+                if config.football_data_token:
+                    competitions = _fetch_competitions_fd(config.football_data_token)
+                    if competitions:
+                        _fetch_public_fixtures(competitions, 24)
+                    if config.odds_api_key:
+                        _fetch_odds_matches(config.odds_api_key)
+            else:
+                # In fast mode, skip slow network jobs
+                pass
         except Exception:
             pass
         time.sleep(max(30, BACKGROUND_REFRESH_SECONDS))
@@ -862,6 +866,8 @@ def _team_id_map() -> dict[str, int]:
         return _TEAM_ID_MAP
     _TEAM_ID_MAP = {}
     try:
+        if FAST_MODE:
+            return _TEAM_ID_MAP
         competitions = _fetch_competitions_fd(config.football_data_token)
         if not competitions:
             return _TEAM_ID_MAP
@@ -3800,7 +3806,8 @@ def dashboard():
     competitions = []
     recent_matches = []
     standings = []
-    competitions = _fetch_competitions_fd(config.football_data_token)
+    if not FAST_MODE:
+        competitions = _fetch_competitions_fd(config.football_data_token)
     allowed_codes = {str(comp.get("code") or "") for comp in competitions if comp.get("code")}
     primary = _primary_competition(competitions)
     if primary:
