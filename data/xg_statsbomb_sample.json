@@ -1,0 +1,32 @@
+[
+  {
+    "match_key": "Como-AC Milan-2026-01-15T19:45:00Z",
+    "home_team": "Como",
+    "away_team": "AC Milan",
+    "league": "Serie A",
+    "commence_time": "2026-01-15T19:45:00Z",
+    "expected_goals_home": 1.15,
+    "expected_goals_away": 2.25,
+    "source": "https://github.com/statsbomb/open-data"
+  },
+  {
+    "match_key": "Verona-Bologna-2026-01-15T17:30:00Z",
+    "home_team": "Verona",
+    "away_team": "Bologna",
+    "league": "Serie A",
+    "commence_time": "2026-01-15T17:30:00Z",
+    "expected_goals_home": 1.32,
+    "expected_goals_away": 1.05,
+    "source": "https://github.com/statsbomb/open-data"
+  },
+  {
+    "match_key": "AC Pisa 1909-Atalanta BC-2026-01-16T19:45:00Z",
+    "home_team": "AC Pisa 1909",
+    "away_team": "Atalanta BC",
+    "league": "Serie A",
+    "commence_time": "2026-01-16T19:45:00Z",
+    "expected_goals_home": 1.05,
+    "expected_goals_away": 1.35,
+    "source": "https://github.com/statsbomb/open-data"
+  }
+]

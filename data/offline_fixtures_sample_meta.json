@@ -1,0 +1,5 @@
+{
+  "description": "Offline Austrian Bundesliga fixtures for caching when live APIs are unavailable.",
+  "fields": ["match_key", "home_team", "away_team", "league", "date", "score_ht", "score_ft"],
+  "usage": "Feed into the dispatcher when real-time sources are missing."
+}

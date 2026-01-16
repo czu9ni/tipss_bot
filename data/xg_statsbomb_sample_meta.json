@@ -1,0 +1,13 @@
+{
+  "source": "https://github.com/statsbomb/open-data",
+  "fields": [
+    "match_key",
+    "home_team",
+    "away_team",
+    "commence_time",
+    "expected_goals_home",
+    "expected_goals_away",
+    "league"
+  ],
+  "usage": "Aggregated xG per match; use difference for logistic expected goals coefficient."
+}

@@ -11,6 +11,7 @@ import re
 import time
 import base64
 import hmac
+from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 import math
@@ -78,6 +79,11 @@ RSS_FEEDS = [
 ]
 RSS_CACHE_TTL_SECONDS = 600
 _RSS_CACHE: dict[str, object] = {"fetched_at": 0.0, "items": []}
+_DATA_DIR = Path(os.path.dirname(__file__)) / "data"
+_XG_INDEX: dict[str, dict] | None = None
+_INJURY_RECORDS: dict[str, list[dict]] | None = None
+_RSS_FEED_LIST: list[dict] | None = None
+_OFFLINE_FIXTURES_CACHE: list[dict] | None = None
 _GEOCODE_CACHE: dict[str, dict] = {}
 _SERVER_TIME_CACHE = {"ts": 0.0, "value": None}
 _SERVER_TIME_SOURCE = "system"
@@ -562,16 +568,30 @@ def _start_background_refresh() -> None:
 _start_background_refresh()
 
 
-def _load_weights() -> dict[str, float]:
+def _load_weights() -> dict[str, object]:
     global _WEIGHTS_CACHE
     if _WEIGHTS_CACHE is not None:
         return _WEIGHTS_CACHE
-    defaults = {
-        "elo": 0.5,
-        "form": 0.2,
+    defaults: dict[str, object] = {
+        "elo": 0.30,
+        "form": 0.20,
+        "table": 0.05,
         "market": 0.15,
-        "injury": 0.1,
+        "injury": 0.05,
         "weather": 0.05,
+        "news": 0.20,
+        "model": {
+            "beta0": -0.2,
+            "beta_elo": 0.8,
+            "beta_form": 0.6,
+            "beta_table": 0.25,
+            "beta_xg": 0.5,
+            "beta_lineup": 0.35,
+            "beta_injury": -0.45,
+            "beta_weather": -0.25,
+            "beta_news": 0.12,
+        },
+        "final": {"value": 0.5, "prob": 0.3, "news": 0.2},
     }
     path = os.path.join("data", "weights.json")
     if os.path.exists(path):
@@ -579,11 +599,93 @@ def _load_weights() -> dict[str, float]:
             with open(path, "r", encoding="utf-8") as handle:
                 data = json.load(handle)
                 if isinstance(data, dict):
-                    defaults.update({k: float(v) for k, v in data.items() if k in defaults})
+                    for key, value in data.items():
+                        if key in defaults and isinstance(defaults[key], dict) and isinstance(value, dict):
+                            defaults[key].update(value)
+                        else:
+                            defaults[key] = value
         except Exception:
             pass
     _WEIGHTS_CACHE = defaults
     return defaults
+
+
+def _team_index_key(name: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]", "", name.lower())
+    return cleaned
+
+
+def _load_json_records(filename: str) -> list[dict]:
+    path = _DATA_DIR / filename
+    if not path.exists():
+        return []
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+            if isinstance(data, list):
+                return [item for item in data if isinstance(item, dict)]
+    except Exception:
+        pass
+    return []
+
+
+def _load_xg_index() -> dict[str, dict]:
+    global _XG_INDEX
+    if _XG_INDEX is not None:
+        return _XG_INDEX
+    records = _load_json_records("xg_statsbomb_sample.json")
+    index = {}
+    for entry in records:
+        key = entry.get("match_key")
+        if not key:
+            continue
+        index[key] = entry
+    _XG_INDEX = index
+    return index
+
+
+def _load_injury_records() -> dict[str, list[dict]]:
+    global _INJURY_RECORDS
+    if _INJURY_RECORDS is not None:
+        return _INJURY_RECORDS
+    records = _load_json_records("transfermarkt_injury_sample.json")
+    grouped: dict[str, list[dict]] = {}
+    for entry in records:
+        team = str(entry.get("team") or "")
+        key = _team_index_key(team)
+        if not key:
+            continue
+        grouped.setdefault(key, []).append(entry)
+    _INJURY_RECORDS = grouped
+    return grouped
+
+
+def _team_injury_index_data(team_name: str) -> float:
+    key = _team_index_key(team_name)
+    records = _load_injury_records().get(key, [])
+    if not records:
+        return 0.0
+    total_games = sum(float(record.get("games_missed", 0)) for record in records)
+    base = max(1.0, len(records) * 2.0)
+    return min(1.0, total_games / base)
+
+
+def _lineup_strength_from_data(team_name: str) -> float:
+    key = _team_index_key(team_name)
+    records = _load_injury_records().get(key, [])
+    if not records:
+        return 1.0
+    penalty = min(0.6, len(records) * 0.12)
+    return max(0.5, 1.0 - penalty)
+
+
+def _sample_match_xg(match: dict) -> tuple[float | None, float | None]:
+    records = _load_xg_index()
+    key = _match_key(match)
+    entry = records.get(key)
+    if entry:
+        return entry.get("expected_goals_home"), entry.get("expected_goals_away")
+    return None, None
 
 
 def _normalize_name(name: str) -> str:
@@ -943,13 +1045,45 @@ def _fetch_clubelo(team_name: str) -> float:
     return 1500.0
 
 
-def _model_probs(elo_diff: float, form_diff: float) -> tuple[float, float, float]:
-    elo_norm = max(-1.0, min(1.0, elo_diff))
-    form_norm = max(-1.0, min(1.0, form_diff))
-    z = 0.7 * elo_norm + 0.3 * form_norm
-    p_home = 1 / (1 + math.exp(-2.0 * z))
-    eq = 1.0 - abs(elo_norm)
-    p_draw = max(0.12, min(0.32, 0.18 + 0.12 * eq))
+def _model_probs(
+    elo_diff: float,
+    form_diff: float,
+    *,
+    table_diff: float = 0.0,
+    xg_diff: float = 0.0,
+    lineup_diff: float = 0.0,
+    injury_diff: float = 0.0,
+    weather_risk: float = 0.0,
+    news_sentiment_diff: float = 0.0,
+    weights: dict[str, object] | None = None,
+) -> tuple[float, float, float]:
+    if weights is None:
+        weights = _load_weights()
+    model_config = weights.get("model", {})
+    beta0 = float(model_config.get("beta0", -0.2))
+    beta_elo = float(model_config.get("beta_elo", 0.8))
+    beta_form = float(model_config.get("beta_form", 0.6))
+    beta_table = float(model_config.get("beta_table", 0.25))
+    beta_xg = float(model_config.get("beta_xg", 0.5))
+    beta_lineup = float(model_config.get("beta_lineup", 0.35))
+    beta_injury = float(model_config.get("beta_injury", -0.45))
+    beta_weather = float(model_config.get("beta_weather", -0.25))
+    beta_news = float(model_config.get("beta_news", 0.12))
+
+    z = (
+        beta0
+        + beta_elo * elo_diff
+        + beta_form * form_diff
+        + beta_table * table_diff
+        + beta_xg * xg_diff
+        + beta_lineup * lineup_diff
+        + beta_injury * injury_diff
+        + beta_weather * weather_risk
+        + beta_news * news_sentiment_diff
+    )
+    p_home = 1 / (1 + math.exp(-z))
+    err = 1.0 - abs(max(-1.0, min(1.0, elo_diff)))
+    p_draw = max(0.12, min(0.32, 0.18 + 0.12 * err))
     rem = 1.0 - p_draw
     p_home = max(0.05, min(0.95, p_home))
     p_away = rem * (1.0 - p_home)
@@ -1688,6 +1822,29 @@ def _score_pick(
     table_diff = max(-1.0, min(1.0, table_home - table_away))
     exp_home, exp_away, exp_total = _expected_goals(home_stats, away_stats)
 
+    sample_home_xg, sample_away_xg = _sample_match_xg(match)
+    if sample_home_xg is not None and sample_away_xg is not None:
+        xg_diff_value = sample_home_xg - sample_away_xg
+    else:
+        xg_diff_value = exp_home - exp_away
+    xg_diff = max(-1.0, min(1.0, xg_diff_value / 2.5))
+    lineup_home = _lineup_strength_from_data(home_team)
+    lineup_away = _lineup_strength_from_data(away_team)
+    lineup_diff = max(-1.0, min(1.0, lineup_home - lineup_away))
+    injury_data_home = _team_injury_index_data(home_team)
+    injury_data_away = _team_injury_index_data(away_team)
+    data_injury_diff = max(-1.0, min(1.0, injury_data_home - injury_data_away))
+    weights = _load_weights()
+    logistic_kwargs = {
+        "table_diff": table_diff,
+        "xg_diff": xg_diff,
+        "lineup_diff": lineup_diff,
+        "injury_diff": data_injury_diff,
+        "weather_risk": weather_factor,
+        "news_sentiment_diff": news_score,
+        "weights": weights,
+    }
+
     outcome_name = str(outcome.get("name") or "")
     point_val = outcome.get("point")
     point = float(point_val) if isinstance(point_val, (int, float)) else None
@@ -1698,10 +1855,13 @@ def _score_pick(
     elo_strength = 0.5
     form_strength = 0.5
     table_strength = 0.5
-    injury_index = (injury_home + injury_away) / 2.0
+    injury_index = max(
+        (injury_home + injury_away) / 2.0,
+        (injury_data_home + injury_data_away) / 2.0,
+    )
 
     if market_key == "h2h":
-        p_home, p_draw, p_away = _model_probs(elo_diff, form_diff)
+        p_home, p_draw, p_away = _model_probs(elo_diff, form_diff, **logistic_kwargs)
         if outcome_name == "Draw":
             model_prob = p_draw
             selection_label = "Donto"
@@ -1723,7 +1883,7 @@ def _score_pick(
         else:
             return None
     elif market_key == "double_chance":
-        p_home, p_draw, p_away = _model_probs(elo_diff, form_diff)
+        p_home, p_draw, p_away = _model_probs(elo_diff, form_diff, **logistic_kwargs)
         lowered = outcome_name.lower()
         if lowered in {"1x", "1-x", "home or draw"} or ("draw" in lowered and home_team.lower() in lowered):
             model_prob = p_home + p_draw
@@ -1743,7 +1903,7 @@ def _score_pick(
             return None
         form_strength = model_prob
     elif market_key == "draw_no_bet":
-        p_home, _, p_away = _model_probs(elo_diff, form_diff)
+        p_home, _, p_away = _model_probs(elo_diff, form_diff, **logistic_kwargs)
         denom = max(0.01, p_home + p_away)
         if outcome_name == home_team:
             model_prob = p_home / denom
@@ -1840,26 +2000,42 @@ def _score_pick(
         return None
 
     form_strength = 0.7 * form_strength + 0.3 * table_strength
-    market_diff = max(0.0, model_prob - implied_prob)
-    weights = _load_weights()
+    value = model_prob - implied_prob
+    final_weights = weights.get("final", {})
+    value_weight = float(final_weights.get("value", 0.5))
+    prob_weight = float(final_weights.get("prob", 0.3))
+    news_weight = float(final_weights.get("news", 0.2))
     total = (
-        elo_strength * weights["elo"]
-        + form_strength * weights["form"]
-        + market_diff * weights["market"]
-        + (1.0 - injury_index) * weights["injury"]
-        + (1.0 - weather_factor) * weights["weather"]
+        value_weight * value
+        + prob_weight * model_prob
+        + news_weight * news_score
     )
+    market_diff = max(0.0, value)
     reason_parts = []
     if elo_strength >= 0.65:
         reason_parts.append("eros csapateroseg")
     if form_strength >= 0.6:
         reason_parts.append("jobb forma")
+    if xg_diff >= 0.2:
+        reason_parts.append("xG elony")
+    elif xg_diff <= -0.2:
+        reason_parts.append("xG deficit")
+    if lineup_diff >= 0.25:
+        reason_parts.append("hazai kezdoero elony")
+    elif lineup_diff <= -0.25:
+        reason_parts.append("vendeg kezdoero elony")
+    if data_injury_diff >= 0.25:
+        reason_parts.append("kevesebb hazai serules")
+    elif data_injury_diff <= -0.25:
+        reason_parts.append("vendeg serules kockazat")
     if market_diff >= 0.02:
         reason_parts.append("ertek az oddsban")
     if weather_factor >= 0.4:
         reason_parts.append("idojaras kockazat")
     if news_score >= 0.05:
         reason_parts.append("pozitiv hirek")
+    elif news_score <= -0.05:
+        reason_parts.append("negativ hirek")
     if not reason_parts:
         reason_parts.append("kiegyensulyozott jelek")
     reason_text = "Magyarazat: " + ", ".join(reason_parts) + "."
@@ -1885,10 +2061,16 @@ def _score_pick(
         "form_strength": form_strength,
         "market_diff": market_diff,
         "injury_index": injury_index,
+        "injury_data_diff": data_injury_diff,
+        "lineup_diff": lineup_diff,
+        "lineup_strength_home": lineup_home,
+        "lineup_strength_away": lineup_away,
         "weather_factor": weather_factor,
         "news_score": news_score,
+        "value": value,
         "model_prob": model_prob,
         "implied_prob": implied_prob,
+        "xg_diff": xg_diff,
         "explain_hu": reason_text,
     }
 

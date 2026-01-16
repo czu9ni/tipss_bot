@@ -1,0 +1,57 @@
+[
+  {
+    "team": "AC Milan",
+    "player": "Theo Hernandez",
+    "injury_reason": "muscle strain",
+    "from_date": "2026-01-03",
+    "end_date": "2026-01-20",
+    "days_missed": 17,
+    "games_missed": 4,
+    "status": "out",
+    "source": "https://www.transfermarkt.com/"
+  },
+  {
+    "team": "Bologna",
+    "player": "Riccardo Orsolini",
+    "injury_reason": "ankle sprain",
+    "from_date": "2026-01-10",
+    "end_date": "2026-01-25",
+    "days_missed": 15,
+    "games_missed": 3,
+    "status": "doubt",
+    "source": "https://www.transfermarkt.com/"
+  },
+  {
+    "team": "Como",
+    "player": "Nicolo Barella",
+    "injury_reason": "knee stress",
+    "from_date": "2026-01-12",
+    "end_date": "2026-01-30",
+    "days_missed": 18,
+    "games_missed": 4,
+    "status": "out",
+    "source": "https://www.transfermarkt.com/"
+  },
+  {
+    "team": "Atalanta BC",
+    "player": "Duvan Zapata",
+    "injury_reason": "hamstring",
+    "from_date": "2026-01-08",
+    "end_date": "2026-01-20",
+    "days_missed": 12,
+    "games_missed": 3,
+    "status": "doubt",
+    "source": "https://www.transfermarkt.com/"
+  },
+  {
+    "team": "Verona",
+    "player": "Antonin Barak",
+    "injury_reason": "groin strain",
+    "from_date": "2026-01-01",
+    "end_date": "2026-01-15",
+    "days_missed": 14,
+    "games_missed": 5,
+    "status": "out",
+    "source": "https://www.transfermarkt.com/"
+  }
+]

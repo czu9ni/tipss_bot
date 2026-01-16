@@ -1,0 +1,14 @@
+{
+  "source": "https://www.transfermarkt.com/",
+  "fields": [
+    "team",
+    "player",
+    "injury_reason",
+    "from_date",
+    "end_date",
+    "days_missed",
+    "games_missed",
+    "status"
+  ],
+  "usage": "Team-level injury reports for lineup strength and injury indices."
+}

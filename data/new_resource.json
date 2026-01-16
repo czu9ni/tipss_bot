@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Austrian Bundesliga 2023/24 results (sample)",
+    "file": "github_model.json",
+    "source_url": "https://github.com/openfootball/football.json/blob/master/2023-24/at.1.json",
+    "description": "Sample of match results from the Austrian Bundesliga 2023/24 season. Each entry includes the home and away teams, date, half-time and full-time scores and placeholders for expected goals, injuries and news sentiment. The dataset can be extended with xG, lineup or injury features.",
+    "features": [
+      "date",
+      "home_team",
+      "away_team",
+      "score_ht_home",
+      "score_ht_away",
+      "score_ft_home",
+      "score_ft_away",
+      "expected_goals_home",
+      "expected_goals_away",
+      "injury_count",
+      "news_sentiment"
+    ],
+    "type": "results"
+  }
+]

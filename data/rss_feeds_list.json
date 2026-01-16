@@ -1,0 +1,50 @@
+[
+  {
+    "name": "Nemzeti Sport - Labdarúgás",
+    "url": "https://www.nemzetisport.hu/rss/labdarugas",
+    "language": "hu",
+    "topics": ["Hungarian league", "National team"]
+  },
+  {
+    "name": "BBC Sport - Football",
+    "url": "https://feeds.bbci.co.uk/sport/football/rss.xml",
+    "language": "en",
+    "topics": ["Premier League", "Champions League"]
+  },
+  {
+    "name": "Sky Sports - Football",
+    "url": "https://www.skysports.com/rss/12040",
+    "language": "en",
+    "topics": ["English football", "Injuries"]
+  },
+  {
+    "name": "Guardian Football",
+    "url": "https://www.theguardian.com/football/rss",
+    "language": "en",
+    "topics": ["Transfer news", "Tactics"]
+  },
+  {
+    "name": "90min Football Feed",
+    "url": "https://www.90min.com/rss",
+    "language": "en",
+    "topics": ["General news"]
+  },
+  {
+    "name": "talkSPORT Football",
+    "url": "https://talksport.com/rss-tag/football/",
+    "language": "en",
+    "topics": ["Prematch expectation"]
+  },
+  {
+    "name": "Sportal News",
+    "url": "https://www.sportal.hu/rss/football",
+    "language": "hu",
+    "topics": ["Central European leagues"]
+  },
+  {
+    "name": "Yahoo Soccer",
+    "url": "https://sports.yahoo.com/soccer/rss/",
+    "language": "en",
+    "topics": ["International news"]
+  }
+]

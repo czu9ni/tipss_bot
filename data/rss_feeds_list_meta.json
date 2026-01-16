@@ -1,0 +1,5 @@
+{
+  "description": "Curated Hungarian and international football RSS sources for news sentiment.",
+  "fields": ["name", "url", "language", "topics"],
+  "usage": "Feed manager can poll these URLs, translate results, and summarize per match."
+}

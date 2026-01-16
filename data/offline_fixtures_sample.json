@@ -1,0 +1,32 @@
+[
+  {
+    "match_key": "Austria Vienna-Red Bull Salzburg-2026-01-10T17:00:00Z",
+    "home_team": "Austria Vienna",
+    "away_team": "Red Bull Salzburg",
+    "league": "Austrian Bundesliga",
+    "date": "2026-01-10",
+    "score_ht": "0-1",
+    "score_ft": "1-2",
+    "source": "https://github.com/openfootball/football.json"
+  },
+  {
+    "match_key": "Sturm Graz-LASK Linz-2026-01-09T19:30:00Z",
+    "home_team": "Sturm Graz",
+    "away_team": "LASK Linz",
+    "league": "Austrian Bundesliga",
+    "date": "2026-01-09",
+    "score_ht": "1-0",
+    "score_ft": "2-2",
+    "source": "https://github.com/openfootball/football.json"
+  },
+  {
+    "match_key": "Rapid Vienna-SK Austria Klagenfurt-2026-01-11T19:00:00Z",
+    "home_team": "Rapid Vienna",
+    "away_team": "SK Austria Klagenfurt",
+    "league": "Austrian Bundesliga",
+    "date": "2026-01-11",
+    "score_ht": "0-0",
+    "score_ft": "3-1",
+    "source": "https://github.com/openfootball/football.json"
+  }
+]
