@@ -1,0 +1,24 @@
+[
+  {
+    "commence_time": "2026-01-16T19:45:00Z",
+    "home_team": "AC Pisa 1909",
+    "away_team": "Atalanta BC",
+    "competition": "Serie A",
+    "comp_code": "SA",
+    "sport_key": "soccer_italy_serie_a",
+    "home_id": 487,
+    "away_id": 102,
+    "status": "SCHEDULED"
+  },
+  {
+    "commence_time": "2026-01-17T20:00:00Z",
+    "home_team": "Paris Saint-Germain FC",
+    "away_team": "Lille OSC",
+    "competition": "Ligue 1",
+    "comp_code": "FL1",
+    "sport_key": "soccer_france_ligue_one",
+    "home_id": 145,
+    "away_id": 199,
+    "status": "SCHEDULED"
+  }
+]

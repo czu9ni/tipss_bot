@@ -15,6 +15,7 @@ from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 import math
 import requests
+import threading
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -198,8 +199,14 @@ _TRANSLATE_CACHE: dict[str, dict[str, object]] = {}
 _TEAM_ID_CACHE: dict[str, dict[str, object]] = {}
 _FIXTURE_STATS_CACHE: dict[str, dict[str, object]] = {}
 _ODDS_MARKETS_DEFAULT = "h2h,totals,btts,team_totals,spreads,draw_no_bet,double_chance,alternate_totals,alternate_team_totals,alternate_spreads"
+BACKGROUND_REFRESH_SECONDS = int(os.environ.get("BACKGROUND_REFRESH_SECONDS", "600"))
+OFFLINE_FIXTURES_TTL_SECONDS = int(os.environ.get("OFFLINE_FIXTURES_TTL_SECONDS", "3600"))
+RSS_SOURCES_FILE = os.path.join(os.path.dirname(__file__), "data", "rss_sources.json")
+RSS_EXTRA_SOURCES_FILE = os.path.join(os.path.dirname(__file__), "data", "rss_sources_extra.json")
+OFFLINE_FIXTURES_FILE = os.path.join(os.path.dirname(__file__), "data", "offline_fixtures.json")
 LOCAL_DB_TTL_SECONDS = int(os.environ.get("LOCAL_DB_TTL_SECONDS", "300"))
 _LOCAL_DB_CACHE: dict[str, object] = {"matches": None, "standings": None, "ts": 0.0}
+_OFFLINE_FIXTURES_CACHE: dict[str, object] = {"fixtures": None, "ts": 0.0}
 _PICK_MIN_ODDS = float(os.environ.get("PICK_MIN_ODDS", "0"))
 _PICK_MAX_ODDS = float(os.environ.get("PICK_MAX_ODDS", "0"))
 _SERVER_STARTED_AT = datetime.now(timezone.utc)
@@ -474,19 +481,85 @@ def _parse_rss_items(xml_text: str) -> list[dict]:
 
 
 def _load_rss_sources() -> list[dict]:
-    path = os.path.join("data", "rss_sources.json")
-    if os.path.exists(path):
+    sources: dict[str, dict] = {}
+    max_sources = int(os.environ.get("RSS_MAX_SOURCES", "0"))
+    for path in (RSS_SOURCES_FILE, RSS_EXTRA_SOURCES_FILE):
+        if not os.path.exists(path):
+            continue
         try:
             with open(path, "r", encoding="utf-8") as handle:
                 data = json.load(handle)
-                if isinstance(data, list):
-                    max_sources = int(os.environ.get("RSS_MAX_SOURCES", "0"))
-                    if max_sources > 0:
-                        return data[:max_sources]
-                    return data
         except Exception:
-            return RSS_FEEDS
-    return RSS_FEEDS
+            continue
+        if not isinstance(data, list):
+            continue
+        for entry in data:
+            url = str(entry.get("url") or "").strip()
+            if not url:
+                continue
+            label = str(entry.get("label") or url)
+            weight = float(entry.get("weight", 0.5))
+            existing = sources.get(url)
+            if existing and existing.get("weight", 0) >= weight:
+                continue
+            sources[url] = {"url": url, "weight": weight, "label": label}
+    result = list(sources.values()) or RSS_FEEDS
+    if max_sources > 0:
+        return result[:max_sources]
+    return result
+
+
+def _load_offline_fixtures() -> list[dict]:
+    cache = _OFFLINE_FIXTURES_CACHE
+    now = time.time()
+    if cache.get("fixtures") is not None and (now - float(cache.get("ts", 0.0))) < OFFLINE_FIXTURES_TTL_SECONDS:
+        return list(cache["fixtures"])
+    fixtures: list[dict] = []
+    if os.path.exists(OFFLINE_FIXTURES_FILE):
+        try:
+            with open(OFFLINE_FIXTURES_FILE, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            if isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict):
+                        match = dict(item)
+                        if match.get("home_team") and match.get("away_team"):
+                            fixtures.append(match)
+        except Exception:
+            fixtures = []
+    cache["fixtures"] = fixtures
+    cache["ts"] = now
+    return fixtures
+
+
+_BACKGROUND_THREAD: threading.Thread | None = None
+
+
+def _background_refresh_loop() -> None:
+    while True:
+        try:
+            if not FAST_MODE:
+                _fetch_rss_items()
+            competitions = _fetch_competitions_fd(config.football_data_token)
+            if competitions:
+                _fetch_public_fixtures(competitions, 24)
+            if config.odds_api_key:
+                _fetch_odds_matches(config.odds_api_key)
+        except Exception:
+            pass
+        time.sleep(max(30, BACKGROUND_REFRESH_SECONDS))
+
+
+def _start_background_refresh() -> None:
+    global _BACKGROUND_THREAD
+    if BACKGROUND_REFRESH_SECONDS <= 0 or _BACKGROUND_THREAD is not None:
+        return
+    thread = threading.Thread(target=_background_refresh_loop, daemon=True)
+    thread.start()
+    _BACKGROUND_THREAD = thread
+
+
+_start_background_refresh()
 
 
 def _load_weights() -> dict[str, float]:
@@ -2881,6 +2954,15 @@ def _fetch_public_fixtures(
         fixtures = filtered
     if STAT_ONLY_MAX_FIXTURES > 0 and len(fixtures) > STAT_ONLY_MAX_FIXTURES:
         fixtures = fixtures[:STAT_ONLY_MAX_FIXTURES]
+    offline = _load_offline_fixtures()
+    if offline:
+        existing_keys = { _match_key(item) for item in fixtures }
+        for match in offline:
+            key = _match_key(match)
+            if key in existing_keys:
+                continue
+            fixtures.append(match)
+            existing_keys.add(key)
     return fixtures, standings_by_comp
 
 
