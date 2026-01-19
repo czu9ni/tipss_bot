@@ -1,4 +1,5 @@
-from flask import Flask, render_template_string, request, redirect, url_for
+from flask import Flask, render_template_string, request, redirect, url_for, jsonify
+from flask_compress import Compress
 from soccer_bot.config import load_config
 from soccer_bot.db import connect
 from soccer_bot.repo import Match, get_team_stats, list_matches
@@ -11,6 +12,7 @@ import re
 import time
 import base64
 import hmac
+import hashlib
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
@@ -19,8 +21,10 @@ import requests
 import threading
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from zoneinfo import ZoneInfo
 
 app = Flask(__name__)
+Compress(app)
 
 def _load_dotenv() -> None:
     env_path = os.environ.get("SOCCER_ENV_PATH") or os.path.join(os.path.dirname(__file__), ".env")
@@ -47,6 +51,38 @@ BASIC_AUTH_USER = os.environ.get("BASIC_AUTH_USER", "")
 BASIC_AUTH_PASSWORD = os.environ.get("BASIC_AUTH_PASSWORD", "")
 ALLOWED_IPS = {ip.strip() for ip in os.environ.get("ALLOWED_IPS", "127.0.0.1,::1").split(",") if ip.strip()}
 FAST_MODE = os.environ.get("FAST_MODE", "0") == "1"
+
+BUDAPEST_TZ = ZoneInfo("Europe/Budapest")
+
+def _parse_match_dt(match: dict) -> datetime | None:
+    dt_raw = (
+        match.get("utc")
+        or match.get("kickoff_utc")
+        or match.get("date_utc")
+        or match.get("datetime")
+        or match.get("date")
+        or match.get("commence_time")
+    )
+    if not dt_raw:
+        return None
+
+    s = str(dt_raw).replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        try:
+            dt = datetime.fromisoformat(s + "T00:00:00")
+        except Exception:
+            return None
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=BUDAPEST_TZ)
+
+    return dt
+
+
+def _within_next_24h(match_dt: datetime, now: datetime) -> bool:
+    return now <= match_dt < (now + timedelta(hours=24))
 AUTO_REFRESH_SECONDS = int(os.environ.get("AUTO_REFRESH_SECONDS", "900"))
 TRANSLATE_API_URL = os.environ.get("TRANSLATE_API_URL", "").strip()
 TRANSLATE_API_KEY = os.environ.get("TRANSLATE_API_KEY", "").strip()
@@ -174,6 +210,7 @@ _TEAM_LOCATION_OVERRIDES: dict[str, dict] | None = None
 _SPORTS_CACHE: dict[str, object] = {"fetched_at": 0.0, "keys": []}
 _ODDS_LAST_ERROR: str | None = None
 _CACHE_KEY = "latest_picks"
+_CACHE_RESET_LOCK = threading.Lock()
 SPORTS_CACHE_TTL_SECONDS = 3600
 FD_COMP_TTL_SECONDS = int(os.environ.get("FD_COMP_TTL_SECONDS", "21600"))
 FD_RECENT_TTL_SECONDS = int(os.environ.get("FD_RECENT_TTL_SECONDS", "600"))
@@ -207,6 +244,32 @@ _FIXTURE_STATS_CACHE: dict[str, dict[str, object]] = {}
 _ODDS_MARKETS_DEFAULT = "h2h,totals,btts,team_totals,spreads,draw_no_bet,double_chance,alternate_totals,alternate_team_totals,alternate_spreads"
 BACKGROUND_REFRESH_SECONDS = int(os.environ.get("BACKGROUND_REFRESH_SECONDS", "600"))
 OFFLINE_FIXTURES_TTL_SECONDS = int(os.environ.get("OFFLINE_FIXTURES_TTL_SECONDS", "3600"))
+
+_RESPONSE_CACHE: dict[str, object] = {"html": "", "ts": 0.0}
+_RESPONSE_LOCK = threading.Lock()
+RESPONSE_CACHE_TTL = int(os.environ.get("RESPONSE_CACHE_TTL", "30"))
+RSS_REFRESH_SECONDS = int(os.environ.get("RSS_REFRESH_SECONDS", "300"))
+STANDINGS_REFRESH_SECONDS = int(os.environ.get("STANDINGS_REFRESH_SECONDS", "120"))
+ODDS_REFRESH_SECONDS = int(os.environ.get("ODDS_REFRESH_SECONDS", "60"))
+_LAST_RSS_FETCH: float = 0.0
+_LAST_STANDINGS_FETCH: float = 0.0
+_LAST_ODDS_FETCH: float = 0.0
+_LAST_RENDER_HASH: str | None = None
+_LAST_RENDER_TS: float = 0.0
+_LAST_PAYLOAD: dict | None = None
+
+
+def _reset_runtime_caches() -> None:
+    with _CACHE_RESET_LOCK:
+        _ODDS_CACHE["ts"] = 0.0
+        _ODDS_CACHE["matches"] = []
+        _ODDS_CACHE["error"] = None
+        _RSS_CACHE["fetched_at"] = 0.0
+        _RSS_CACHE["items"] = []
+        _SPORTS_CACHE["fetched_at"] = 0.0
+        _SPORTS_CACHE["keys"] = []
+        _LOCAL_DB_CACHE["matches"] = None
+        _LOCAL_DB_CACHE["standings"] = None
 RSS_SOURCES_FILE = os.path.join(os.path.dirname(__file__), "data", "rss_sources.json")
 RSS_EXTRA_SOURCES_FILE = os.path.join(os.path.dirname(__file__), "data", "rss_sources_extra.json")
 OFFLINE_FIXTURES_FILE = os.path.join(os.path.dirname(__file__), "data", "offline_fixtures.json")
@@ -544,21 +607,28 @@ _BACKGROUND_THREAD: threading.Thread | None = None
 
 def _background_refresh_loop() -> None:
     while True:
+        t0 = time.perf_counter()
+        now = time.time()
         try:
             if not FAST_MODE:
-                _fetch_rss_items()
-                if config.football_data_token:
+                if RSS_REFRESH_SECONDS > 0 and (now - _LAST_RSS_FETCH) >= RSS_REFRESH_SECONDS:
+                    _fetch_rss_items()
+                    _LAST_RSS_FETCH = now
+                if config.football_data_token and STANDINGS_REFRESH_SECONDS > 0 and (now - _LAST_STANDINGS_FETCH) >= STANDINGS_REFRESH_SECONDS:
                     competitions = _fetch_competitions_fd(config.football_data_token)
                     if competitions:
                         _fetch_public_fixtures(competitions, 24)
-                    if config.odds_api_key:
-                        _fetch_odds_matches(config.odds_api_key)
-            else:
-                # In fast mode, skip slow network jobs
-                pass
+                    _LAST_STANDINGS_FETCH = now
+                if config.odds_api_key and ODDS_REFRESH_SECONDS > 0 and (now - _LAST_ODDS_FETCH) >= ODDS_REFRESH_SECONDS:
+                    _fetch_odds_matches(config.odds_api_key)
+                    _LAST_ODDS_FETCH = now
         except Exception:
             pass
-        time.sleep(max(30, BACKGROUND_REFRESH_SECONDS))
+        _render_and_cache(force=False)
+        dt = time.perf_counter() - t0
+        if dt > 0.2:
+            print(f"[SLOW] background loop cycle: {dt:.2f}s")
+        time.sleep(max(60, BACKGROUND_REFRESH_SECONDS))
 
 
 def _start_background_refresh() -> None:
@@ -570,7 +640,30 @@ def _start_background_refresh() -> None:
     _BACKGROUND_THREAD = thread
 
 
-_start_background_refresh()
+def _render_and_cache(force: bool = False, active_tab: str = "tips") -> bool:
+    global _LAST_RENDER_HASH, _LAST_RENDER_TS
+    throttle = max(60, BACKGROUND_REFRESH_SECONDS)
+    with app.app_context():
+        context, payload = _render_dashboard(active_tab, refresh_requested=True, render=False)
+    payload_hash = _stable_hash(payload)
+    now = time.time()
+    if not force and _LAST_RENDER_HASH == payload_hash and (now - _LAST_RENDER_TS) < throttle:
+        return False
+    with app.app_context():
+        html = render_template_string(TEMPLATE, **context)
+    with _RESPONSE_LOCK:
+        _RESPONSE_CACHE["html"] = html
+        _RESPONSE_CACHE["ts"] = time.time()
+        global _LAST_PAYLOAD
+        _LAST_PAYLOAD = payload
+    _LAST_RENDER_HASH = payload_hash
+    _LAST_RENDER_TS = now
+    return True
+
+
+def _stable_hash(payload: dict) -> str:
+    s = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(s.encode("utf-8")).hexdigest()
 
 
 def _load_weights() -> dict[str, object]:
@@ -1434,7 +1527,86 @@ def _enrich_pick(pick: dict) -> dict:
     pick["home_standing"] = _standings_highlight(standings, pick.get("home_team", ""), pick.get("home_id"))
     pick["away_standing"] = _standings_highlight(standings, pick.get("away_team", ""), pick.get("away_id"))
     pick["weather"] = _weather_details(pick.get("home_team", ""))
+    return _ensure_pick_fields(pick)
+
+
+def _ensure_pick_fields(pick: dict | None) -> dict | None:
+    if not pick:
+        return None
+    pick.setdefault("value", 0.0)
+    pick.setdefault("model_prob", 0.0)
+    pick.setdefault("implied_prob", 0.0)
+    pick.setdefault("xg_diff", 0.0)
+    pick.setdefault("lineup_diff", 0.0)
+    pick.setdefault("news_score", 0.0)
+    pick.setdefault("score", 0.0)
+    pick.setdefault("odds", 0.0)
+    pick.setdefault("market_label", "")
     return pick
+
+
+def _placeholder_summary() -> dict:
+    return {
+        "team": "Frissítés alatt",
+        "win_rate": 0.0,
+        "goals_for_avg": 0.0,
+        "corners_avg": None,
+        "cards_avg": None,
+        "source": "n/a",
+        "matches": [],
+    }
+
+
+def _placeholder_standing() -> dict:
+    return {
+        "position": None,
+        "points": None,
+        "played": None,
+        "won": None,
+        "draw": None,
+        "lost": None,
+        "goals_for": None,
+        "goals_against": None,
+    }
+
+
+def _placeholder_pick() -> dict:
+    pick = {
+        "match_key": "placeholder",
+        "home_team": "Frissítés alatt",
+        "away_team": "Adatgyűjtés folyamatban",
+        "competition": "Frissítés",
+        "market_key": "h2h",
+        "market_label": "Általános",
+        "outcome": "Javaslat készül",
+        "line": 0.0,
+        "story": "Adatok feltöltése folyamatban, kérjük várjon.",
+        "weather": {},
+        "home_summary": _placeholder_summary(),
+        "away_summary": _placeholder_summary(),
+        "home_standing": _placeholder_standing(),
+        "away_standing": _placeholder_standing(),
+    }
+    return _ensure_pick_fields(pick) or pick
+
+
+def _enforce_tip_presence(best_pick: dict | None, target_matches: list[dict]) -> tuple[dict, list[dict]]:
+    normalized_targets: list[dict] = []
+    for item in target_matches:
+        ensured = _ensure_pick_fields(item)
+        if ensured:
+            normalized_targets.append(ensured)
+    best_pick = _ensure_pick_fields(best_pick)
+    if normalized_targets and not best_pick:
+        best_pick = normalized_targets[0]
+    if not normalized_targets:
+        placeholder = _placeholder_pick()
+        normalized_targets = [placeholder]
+        if not best_pick:
+            best_pick = placeholder
+    if not best_pick:
+        best_pick = _placeholder_pick()
+    return best_pick, normalized_targets
 
 
 def _is_rivalry(home_team: str, away_team: str) -> bool:
@@ -2925,6 +3097,18 @@ def _build_stat_only_picks(
     standings_by_comp: dict[str, list[dict]],
     news_items: list[dict],
 ) -> list[dict]:
+    now = datetime.now(BUDAPEST_TZ)
+    filtered: list[dict] = []
+    for match in fixtures:
+        match_dt = _parse_match_dt(match)
+        if not match_dt:
+            continue
+        match_local = match_dt.astimezone(BUDAPEST_TZ)
+        if _within_next_24h(match_local, now):
+            filtered.append(match)
+    if not filtered:
+        return []
+    fixtures = filtered
     weights = _load_weights()
     picks: list[dict] = []
     for match in fixtures:
@@ -3122,6 +3306,12 @@ def _fetch_public_fixtures(
     fixtures.extend(_fetch_upcoming_fixtures_fd_all(config.football_data_token, window_hours))
     fixtures.extend(_fetch_upcoming_fixtures_api_football(config.api_football_key, window_hours))
     fixtures = _dedupe_fixtures(fixtures)
+    now = datetime.now(BUDAPEST_TZ)
+    fixtures = [
+        item
+        for item in fixtures
+        if (dt := _parse_match_dt(item)) and _within_next_24h(dt.astimezone(BUDAPEST_TZ), now)
+    ]
     if allowed_codes or allowed_pairs:
         filtered = []
         for item in fixtures:
@@ -3652,6 +3842,32 @@ def _store_cached_picks(db, payload: dict) -> None:
     db.connection.commit()
 
 
+def _persist_pick_snapshot(
+    db,
+    odds_data: dict | None,
+    best_pick: dict | None,
+    best_combo: dict | None,
+    target_matches: list[dict],
+    odds_count: int,
+    odds_error: str | None,
+    rss_items: list[dict],
+) -> tuple[dict, list[dict]]:
+    best_pick, target_matches = _enforce_tip_presence(best_pick, target_matches)
+    _store_cached_picks(
+        db,
+        {
+            "odds_data": odds_data,
+            "best_pick": best_pick,
+            "best_combo": best_combo,
+            "target_matches": target_matches,
+            "odds_count": odds_count,
+            "odds_error": odds_error,
+            "rss_sources": ", ".join(sorted({item.get("source", "") for item in rss_items if item.get("source")})),
+        },
+    )
+    return best_pick, target_matches
+
+
 def _load_cached_picks(db) -> dict | None:
     cursor = db.connection.execute(
         "SELECT payload, updated_at FROM cached_picks WHERE key = ?",
@@ -3767,8 +3983,26 @@ def _fetch_odds_matches(api_key: str, keys: list[str] | None = None) -> tuple[li
 
 @app.route('/')
 def dashboard():
-    active_tab = request.args.get("tab", "tips")
-    refresh_requested = request.args.get("refresh") == "1"
+    t0 = time.perf_counter()
+    if not _RESPONSE_CACHE.get("html"):
+        _render_and_cache(force=True)
+    with _RESPONSE_LOCK:
+        html = _RESPONSE_CACHE.get("html", "<html><body>Frissítés folyamatban...</body></html>")
+    dt = (time.perf_counter() - t0) * 1000
+    if dt > 5:
+        print(f"[SLOW] dashboard() {dt:.1f} ms")
+    return html
+
+
+@app.route("/api/dashboard")
+def api_dashboard():
+    if not _LAST_PAYLOAD:
+        _render_and_cache(force=True)
+    payload = _LAST_PAYLOAD or {}
+    return jsonify(payload)
+
+
+def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = True):
     target_odds = 2.0
     window_hours = 24
 
@@ -3802,7 +4036,6 @@ def dashboard():
     form_scores = _build_form_scores(matches)
     table_scores = _build_table_scores(points_map)
 
-    # Fetch competitions
     competitions = []
     recent_matches = []
     standings = []
@@ -3814,7 +4047,6 @@ def dashboard():
         recent_matches = _fetch_recent_matches_fd(config.football_data_token, primary)
         standings = _fetch_standings_fd(config.football_data_token, primary)
 
-    # Fetch odds and tip
     odds_data = None
     target_matches = []
     rss_items: list[dict] = []
@@ -3824,6 +4056,7 @@ def dashboard():
     best_pick = None
     best_combo = None
     diag_counts = {"comp_24": 0, "all_24": 0, "api_football_24": 0, "window_from": "", "window_to": "", "window_source": "system"}
+
     if refresh_requested:
         cached_updated_at = None
         try:
@@ -3847,17 +4080,15 @@ def dashboard():
                 best_pick = _enrich_pick(picks[0]) if picks else None
                 best_combo = None
                 target_matches = [_enrich_pick(item) for item in picks[:2]] if picks else []
-                _store_cached_picks(
+                best_pick, target_matches = _persist_pick_snapshot(
                     db,
-                    {
-                        "odds_data": odds_data,
-                        "best_pick": best_pick,
-                        "best_combo": best_combo,
-                        "target_matches": target_matches,
-                        "odds_count": odds_count,
-                        "odds_error": odds_error,
-                        "rss_sources": ", ".join(sorted({item.get("source", "") for item in rss_items if item.get("source")})),
-                    },
+                    odds_data,
+                    best_pick,
+                    best_combo,
+                    target_matches,
+                    odds_count,
+                    odds_error,
+                    rss_items,
                 )
             else:
                 data, odds_error = _fetch_odds_matches(config.odds_api_key)
@@ -3881,20 +4112,17 @@ def dashboard():
                     best_pick = _enrich_pick(picks[0]) if picks else None
                     best_combo = None
                     target_matches = [_enrich_pick(item) for item in picks[:2]] if picks else []
-                    _store_cached_picks(
+                    best_pick, target_matches = _persist_pick_snapshot(
                         db,
-                        {
-                            "odds_data": odds_data,
-                            "best_pick": best_pick,
-                            "best_combo": best_combo,
-                            "target_matches": target_matches,
-                            "odds_count": odds_count,
-                            "odds_error": odds_error,
-                            "rss_sources": ", ".join(sorted({item.get("source", "") for item in rss_items if item.get("source")})),
-                        },
+                        odds_data,
+                        best_pick,
+                        best_combo,
+                        target_matches,
+                        odds_count,
+                        odds_error,
+                        rss_items,
                     )
                 if use_odds and data:
-
                     for match in data:
                         home_team = match.get("home_team", "")
                         away_team = match.get("away_team", "")
@@ -3913,12 +4141,17 @@ def dashboard():
                 rss_items = _fetch_rss_items()
                 picks: list[dict] = []
                 for match in eligible:
+                    match_dt = _parse_match_dt(match)
+                    if not match_dt:
+                        continue
+                    match_local = match_dt.astimezone(BUDAPEST_TZ)
+                    if not _within_next_24h(match_local, datetime.now(BUDAPEST_TZ)):
+                        continue
                     picks.extend(_build_picks_for_match(match, target_odds, rss_items, db, form_scores, table_scores))
                 if picks:
                     best_combo = _build_best_combo(picks, target_odds)
                     best_pick = max(picks, key=lambda item: item["score"])
                     best_pick = _enrich_pick(best_pick)
-
                 odds_match = None
                 for match in eligible:
                     outcomes = _extract_h2h_outcomes(match)
@@ -3938,21 +4171,17 @@ def dashboard():
                         home_stats = get_team_stats(db, home_team)
                         away_stats = get_team_stats(db, away_team)
                         stats_factor = (home_stats["win_rate"] - away_stats["win_rate"]) * 0.2
-
                         home_prob = 1 / home_odds
                         away_prob = 1 / away_odds
                         draw_prob = 1 / draw_odds
                         home_score = home_prob * 0.4 + (1 if home_odds < 2.5 else 0) * 0.1
                         away_score = away_prob * 0.4 + (1 if away_odds < 2.5 else 0) * 0.1
                         draw_score = draw_prob * 0.2
-
                         weather_factor = _weather_factor(home_team)
                         news_factor = _news_factor(rss_items, home_team, away_team)
-
                         home_final = home_score + stats_factor + weather_factor + news_factor
                         away_final = away_score + stats_factor + weather_factor + news_factor
                         draw_final = draw_score
-
                         if home_final > away_final and home_final > draw_final:
                             tip = (
                                 "Hazai gyozelem (AI: valoszinuseg "
@@ -3982,7 +4211,6 @@ def dashboard():
                             "away_prob": away_prob,
                             "tip": tip,
                         }
-
                 if picks:
                     target_matches = _select_picks_near_odds(picks, target_odds, limit=2)
                     target_matches = [_enrich_pick(item) for item in target_matches]
@@ -4002,16 +4230,18 @@ def dashboard():
             )
         except Exception:
             pass
+        finally:
+            best_pick, target_matches = _enforce_tip_presence(best_pick, target_matches)
         _settle_saved_picks(db, config.odds_api_key)
     else:
         if cached:
             odds_data = cached.get("odds_data")
-            best_pick = cached.get("best_pick")
             best_combo = cached.get("best_combo")
-            target_matches = cached.get("target_matches", [])
+            raw_target_matches = cached.get("target_matches", [])
             odds_count = cached.get("odds_count", 0)
             odds_error = cached.get("odds_error")
             cached_updated_at = cached.get("updated_at")
+            best_pick, target_matches = _enforce_tip_presence(cached.get("best_pick"), raw_target_matches)
     saved_picks = _list_saved_picks(db)
     stake_pct = _stake_from_score(best_pick.get("score") if best_pick else None)
 
@@ -4020,29 +4250,65 @@ def dashboard():
     if cached_updated_at and not rss_sources:
         rss_sources = cached.get("rss_sources", "") if cached else ""
     news_blocks = _news_blocks(target_matches or ([best_pick] if best_pick else []), rss_items)
-    return render_template_string(TEMPLATE,
-                                  odds_configured=bool(config.odds_api_key),
-                                  football_configured=bool(config.football_data_token),
-                                  competitions=competitions,
-                                  odds=odds_data,
-                                  best_pick=best_pick,
-                                  best_combo=best_combo,
-                                  odds_count=odds_count,
-                                  target_matches=target_matches,
-                                  recent_matches=recent_matches,
-                                  standings=standings,
-                                  _match_reasons=_match_reasons,
-                                  rss_items=rss_items,
-                                  rss_sources=rss_sources,
-                                  configured_sources=configured_sources,
-                                  news_blocks=news_blocks,
-                                  saved_picks=saved_picks,
-                                  stake_pct=stake_pct,
-                                  diag_counts=diag_counts,
-                                  cached_updated_at=cached_updated_at,
-                                  odds_error=odds_error,
-                                  active_tab=active_tab,
-                                  refresh_requested=refresh_requested)
+    context = {
+        "odds_configured": bool(config.odds_api_key),
+        "football_configured": bool(config.football_data_token),
+        "competitions": competitions,
+        "odds": odds_data,
+        "best_pick": best_pick,
+        "best_combo": best_combo,
+        "odds_count": odds_count,
+        "target_matches": target_matches,
+        "recent_matches": recent_matches,
+        "standings": standings,
+        "_match_reasons": _match_reasons,
+        "rss_items": rss_items,
+        "rss_sources": rss_sources,
+        "configured_sources": configured_sources,
+        "news_blocks": news_blocks,
+        "saved_picks": saved_picks,
+        "stake_pct": stake_pct,
+        "diag_counts": diag_counts,
+        "cached_updated_at": cached_updated_at,
+        "odds_error": odds_error,
+        "active_tab": active_tab,
+        "refresh_requested": refresh_requested,
+    }
+    payload = {
+        "target_matches": [
+            {
+                "home": pick.get("home_team"),
+                "away": pick.get("away_team"),
+                "score": round(pick.get("score") or 0.0, 2),
+                "value": round((pick.get("value") or 0.0), 3),
+            }
+            for pick in target_matches[:4]
+        ],
+        "standings": [
+            {
+                "team": team.get("team"),
+                "points": team.get("points"),
+            }
+            for team in standings[:5]
+        ],
+        "diag": {
+            "comp_24": diag_counts.get("comp_24"),
+            "all_24": diag_counts.get("all_24"),
+            "api_football_24": diag_counts.get("api_football_24"),
+            "window_from": diag_counts.get("window_from"),
+            "window_to": diag_counts.get("window_to"),
+            "window_source": diag_counts.get("window_source"),
+        },
+        "rss_count": len(rss_items),
+        "saved": len(saved_picks),
+        "timestamp": cached_updated_at,
+    }
+    if not render:
+        return context, payload
+    return render_template_string(TEMPLATE, **context)
+
+
+_start_background_refresh()
 
 
 @app.route("/health")

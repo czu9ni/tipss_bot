@@ -9,6 +9,8 @@ class AppConfig(BaseModel):
     odds_api_key: str = Field(default="", description="Odds API key")
     football_data_token: str = Field(..., min_length=10, description="Football Data token")
     api_football_key: str = Field(default="", description="API-Football key")
+    weather_api_key: str = Field(default="", description="Weather API key")
+    news_api_key: str = Field(default="", description="News API key")
     log_level: str = Field(default="INFO", pattern="^(DEBUG|INFO|WARNING|ERROR)$", description="Logging level")
 
 

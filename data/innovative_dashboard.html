@@ -14,7 +14,7 @@
       --accent-strong: #ff4d98;
       --text: #f5f7ff;
       --muted: rgba(255, 255, 255, 0.75);
-      --shadow: 0 25px 60px rgba(2, 6, 20, 0.7);
+      --shadow: 0 12px 24px rgba(2, 6, 20, 0.5);
       font-family: "Space Grotesk", "Inter", system-ui, sans-serif;
     }
     * {
@@ -23,21 +23,10 @@
     body {
       margin: 0;
       min-height: 100vh;
-      background: radial-gradient(circle at 20% -20%, rgba(77, 245, 255, 0.15), transparent 35%),
-        radial-gradient(circle at 80% 0%, rgba(255, 77, 152, 0.16), transparent 45%), #050b17;
+      background: radial-gradient(circle at 25% -20%, rgba(77, 245, 255, 0.12), transparent 40%),
+        linear-gradient(180deg, #040a16, #060c22);
       color: var(--text);
       overflow-x: hidden;
-    }
-    body::after {
-      content: "";
-      position: fixed;
-      inset: 0;
-      background-image:
-        linear-gradient(transparent 55%, rgba(255, 255, 255, 0.04)),
-        radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.08), transparent 55%);
-      pointer-events: none;
-      opacity: 0.35;
-      z-index: 0;
     }
     .pulse {
       position: absolute;
@@ -112,6 +101,10 @@
       box-shadow: var(--shadow);
       position: relative;
       overflow: hidden;
+      content-visibility: auto;
+      contain-intrinsic-size: 320px;
+      transition: transform 0.2s ease, opacity 0.2s ease;
+      will-change: transform, opacity;
     }
     .card::after {
       content: "";
@@ -124,6 +117,64 @@
     }
     .card:hover::after {
       opacity: 1;
+    }
+    .skeleton {
+      position: relative;
+      min-height: 50vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+    .skeleton-card {
+      width: min(780px, 100%);
+      border-radius: 1.5rem;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 1.5rem;
+      display: grid;
+      gap: 0.75rem;
+      animation: pulse 1.8s ease-in-out infinite;
+    }
+    .skeleton-line {
+      height: 12px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgba(255,255,255,0.1), rgba(255,255,255,0.3), rgba(255,255,255,0.1));
+    }
+    .heavy-placeholder {
+      min-height: 90px;
+      border-radius: 1.2rem;
+      border: 1px dashed rgba(255, 255, 255, 0.15);
+      margin-top: 0.75rem;
+      padding: 0.8rem;
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .toggle-btn {
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 999px;
+      padding: 0.6rem 1.1rem;
+      font-weight: 700;
+      color: var(--text);
+      cursor: pointer;
+      transition: background 0.2s ease, transform 0.2s ease;
+    }
+    .toggle-btn:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    .toggle-btn:hover {
+      background: rgba(255, 255, 255, 0.12);
+      transform: translateY(-1px);
+    }
+    .heavy-trigger {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      align-items: stretch;
+    }
+    .heavy-trigger.wide {
+      grid-column: span 2;
     }
     .status-grid {
       display: grid;
@@ -245,6 +296,26 @@
       margin-top: 1rem;
       font-size: 0.9rem;
     }
+    .table-actions {
+      margin-top: 1rem;
+      display: flex;
+      justify-content: center;
+    }
+    .table-actions .btn {
+      border-radius: 999px;
+      padding: 0.7rem 1.4rem;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text);
+      font-weight: 600;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: background 0.2s ease, transform 0.2s ease;
+    }
+    .table-actions .btn:hover {
+      background: rgba(255, 255, 255, 0.15);
+      transform: translateY(-1px);
+    }
     .table-card th,
     .table-card td {
       text-align: left;
@@ -256,6 +327,59 @@
       font-size: 0.75rem;
       letter-spacing: 0.08em;
       text-transform: uppercase;
+    }
+    .detail-section {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 1rem;
+      margin-top: 1.5rem;
+    }
+    .detail-panel {
+      border-radius: 1.35rem;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 1.1rem;
+      background: rgba(255, 255, 255, 0.02);
+      box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.45);
+    }
+    .detail-panel h3 {
+      margin: 0;
+      letter-spacing: 0.1em;
+      font-size: 1rem;
+    }
+    .detail-panel p {
+      margin: 0.35rem 0 0;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+    .detail-matches {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 0.75rem;
+      font-size: 0.82rem;
+    }
+    .detail-matches th {
+      color: var(--muted);
+      font-size: 0.65rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      padding: 0.35rem 0.4rem;
+    }
+    .detail-matches td {
+      padding: 0.4rem 0.4rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .detail-matches tr:last-child td {
+      border-bottom: none;
+    }
+    .detail-panel,
+    .news-item,
+    .table-card table,
+    .table-card th,
+    .table-card td {
+      box-shadow: none;
+      filter: none;
+      backdrop-filter: none;
+      text-shadow: none;
     }
     @media (max-width: 720px) {
       header {
@@ -270,7 +394,16 @@
 </head>
 <body>
   <div class="pulse"></div>
-  <main>
+  <div id="skeleton" class="skeleton">
+    <div class="skeleton-card">
+      <div class="skeleton-line" style="width: 40%;"></div>
+      <div class="skeleton-line" style="width: 90%;"></div>
+      <div class="skeleton-line" style="width: 80%;"></div>
+      <div class="skeleton-line" style="width: 60%;"></div>
+      <div class="skeleton-line" style="width: 70%;"></div>
+    </div>
+  </div>
+  <main id="app" hidden>
     {% set top_pick = target_matches[0] if target_matches else best_pick %}
     <header>
       <div class="hero-left">
@@ -370,97 +503,20 @@
         {% endif %}
       </article>
 
-      <article class="card">
-        <h2>Aktuális tipp-párosok</h2>
-        {% if target_matches %}
-        <ul>
-          {% for pick in target_matches %}
-          <li class="news-item">
-            <div class="status-value">
-              <strong>{{ pick.home_team }} vs {{ pick.away_team }}</strong>
-              <span class="dot {{ 'good' if pick.value and pick.value > 0 else 'warn' }}"></span>
-            </div>
-            <div class="tag-row">
-              <span class="tag">{{ pick.market_label or "Piac" }}</span>
-              <span class="tag">{{ "%.2f"|format(pick.score or 0.0) }} score</span>
-              <span class="tag">{{ pick.outcome }}</span>
-            </div>
-            <p class="small-label">Indok: {{ ", ".join(_match_reasons(pick)) }}</p>
-          </li>
-          {% endfor %}
-        </ul>
-        {% else %}
-        <p class="small-label">Jelenleg nincs két ajánlott mérkőzés a szűrőben.</p>
-        {% endif %}
-      </article>
+      <div class="heavy-trigger">
+        <button id="btnDetail" class="toggle-btn" type="button">Részletes statisztika betöltése</button>
+        <div id="detailPlaceholder" class="heavy-placeholder" aria-live="polite">Részletes statisztika betöltés alatt...</div>
+      </div>
 
-      <article class="card">
-        <h2>Hírek & sentiment</h2>
-        {% if news_blocks %}
-        <ul>
-          {% for block in news_blocks %}
-          <li class="news-item">
-            <div class="status-value">
-              <span><strong>{{ block.match }}</strong></span>
-              {% if block.sentiment %}
-              <span class="tag" style="border-color: var(--accent); color: var(--accent);">{{ "%.2f"|format(block.sentiment) }}</span>
-              {% endif %}
-            </div>
-            <p class="small-label">{{ block.summary_hu or block.summary or "Nincs leírás" }}</p>
-            {% if block.source %}
-            <p class="small-label">{{ block.source }}</p>
-            {% endif %}
-          </li>
-          {% endfor %}
-        </ul>
-        {% else %}
-        <p class="small-label">Nincs releváns hír a kiválasztott mérkőzésekhez.</p>
-        {% endif %}
-      </article>
+      <div class="heavy-trigger">
+        <button id="btnNews" class="toggle-btn" type="button">Hírek & sentiment betöltése</button>
+        <div id="newsPlaceholder" class="heavy-placeholder" aria-live="polite">Hírek betöltés alatt...</div>
+      </div>
 
-      <article class="card table-card">
-        <h2>Diagnosztika és mentések</h2>
-        <div class="status-grid" style="margin-bottom: 1rem;">
-          <div class="status-item">
-            <div class="status-value">
-              <span>24h ligák</span>
-              <span>{{ diag_counts.comp_24 }}</span>
-            </div>
-            <span class="small-label">Aktív meccsek: {{ diag_counts.all_24 }}</span>
-          </div>
-          <div class="status-item">
-            <div class="status-value">
-              <span>API-Football</span>
-              <span>{{ diag_counts.api_football_24 }}</span>
-            </div>
-            <span class="small-label">Forrás: {{ diag_counts.window_source or "system" }}</span>
-          </div>
-          <div class="status-item">
-            <div class="status-value">
-              <span>Mentett tippek</span>
-              <span>{{ saved_picks|length }}</span>
-            </div>
-            <span class="small-label">Stake: {{ "%.1f"|format(stake_pct if stake_pct else 0.0) }}%</span>
-          </div>
-        </div>
-        <table>
-          <thead>
-            <tr><th>Szelvény</th><th>Oddsz</th><th>Outcome</th></tr>
-          </thead>
-          <tbody>
-            {% for pick in saved_picks[:3] %}
-            <tr>
-              <td>{{ pick.home_team }} vs {{ pick.away_team }}</td>
-              <td>{{ "%.2f"|format(pick.odds if pick.odds else 0.0) }}</td>
-              <td>{{ pick.outcome }}</td>
-            </tr>
-            {% endfor %}
-            {% if not saved_picks %}
-            <tr><td colspan="3" class="small-label">Nincs elmentett tipp.</td></tr>
-            {% endif %}
-          </tbody>
-        </table>
-      </article>
+      <div class="heavy-trigger wide">
+        <button id="btnSaved" class="toggle-btn" type="button">Mentett tippek betöltése</button>
+        <div id="savedPlaceholder" class="heavy-placeholder" aria-live="polite">Mentett tippek betöltésre várnak...</div>
+      </div>
     </section>
 
     <footer class="footer">
@@ -469,5 +525,237 @@
       <span>RSS forrás: {{ rss_sources or configured_sources or "még nincs" }}</span>
     </footer>
   </main>
+
+  <template id="detailTemplate">
+    <article class="card detail-section">
+      <div class="detail-panel">
+        <h3>Részletes statisztika</h3>
+        {% if top_pick %}
+        <p>{{ top_pick.home_team }} vs {{ top_pick.away_team }} – {{ top_pick.market_label or "1X2" }}. {{ top_pick.explain_hu or top_pick.story or ", ".join(_match_reasons(top_pick)[:3]) }}</p>
+        <div class="line">
+          <span>Kockázat</span>
+          <span class="dot {{ 'bad' if top_pick.risk == 'high' else 'warn' if top_pick.risk == 'med' else 'good' }}"></span>
+        </div>
+        <p class="small-label">Időjárás: Esély {{ top_pick.weather.prep_chance if top_pick.weather and top_pick.weather.prep_chance is not none else "n/a" }}%, csapadék {{ top_pick.weather.precip_max if top_pick.weather and top_pick.weather.precip_max is not none else "n/a" }} mm, hőmérséklet {{ top_pick.weather.temp_min if top_pick.weather and top_pick.weather.temp_min is not none else "n/a" }} / {{ top_pick.weather.temp_max if top_pick.weather and top_pick.weather.temp_max is not none else "n/a" }} °C</p>
+        <div class="line">
+          <span>Home forma</span>
+          <span>{{ top_pick.home_summary.form_line or "n/a" }}</span>
+        </div>
+        <div class="line">
+          <span>Away forma</span>
+          <span>{{ top_pick.away_summary.form_line or "n/a" }}</span>
+        </div>
+        {% else %}
+        <p>Nincs kiválasztott mérkőzés részletes statisztikához.</p>
+        {% endif %}
+      </div>
+      <div class="detail-panel">
+        <h3>Legutóbbi meccsek</h3>
+        {% if top_pick %}
+        <table class="detail-matches">
+          <thead>
+            <tr><th>Dátum</th><th>Ellenfél</th><th>Eredmény</th></tr>
+          </thead>
+          <tbody>
+            {% set shown = false %}
+            {% for prefix in ['home', 'away'] %}
+              {% set summary = top_pick[prefix + '_summary'] if top_pick else None %}
+              {% set matches = summary.get('matches', []) if summary else [] %}
+              {% for row in matches[:3] %}
+              <tr>
+                <td>{{ row.date or "?" }}</td>
+                <td>{{ row.opponent or "-" }}</td>
+                <td>{{ row.score or "-" }}</td>
+              </tr>
+              {% set shown = true %}
+              {% endfor %}
+            {% endfor %}
+            {% if not shown %}
+            <tr><td colspan="3">Nincs nyilvántartott legutóbbi meccs.</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+        {% else %}
+        <p>Nincs meccsadat.</p>
+        {% endif %}
+      </div>
+    </article>
+  </template>
+
+  <template id="newsTemplate">
+    <article class="card">
+      <h2>Hírek & sentiment</h2>
+      {% if news_blocks %}
+      <ul>
+        {% for block in news_blocks %}
+        <li class="news-item">
+          <div class="status-value">
+            <span><strong>{{ block.match }}</strong></span>
+            {% if block.sentiment %}
+            <span class="tag" style="border-color: var(--accent); color: var(--accent);">{{ "%.2f"|format(block.sentiment) }}</span>
+            {% endif %}
+          </div>
+          <p class="small-label">{{ block.summary_hu or block.summary or "Nincs leírás" }}</p>
+          {% if block.source %}
+          <p class="small-label">{{ block.source }}</p>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="small-label">Nincs releváns hír a kiválasztott mérkőzésekhez.</p>
+      {% endif %}
+    </article>
+  </template>
+
+  <template id="savedTemplate">
+    <article class="card table-card">
+      <h2>Diagnosztika és mentések</h2>
+      <div class="status-grid" style="margin-bottom: 1rem;">
+        <div class="status-item">
+          <div class="status-value">
+            <span>24h ligák</span>
+            <span>{{ diag_counts.comp_24 }}</span>
+          </div>
+          <span class="small-label">Aktív meccsek: {{ diag_counts.all_24 }}</span>
+        </div>
+        <div class="status-item">
+          <div class="status-value">
+            <span>API-Football</span>
+            <span>{{ diag_counts.api_football_24 }}</span>
+          </div>
+          <span class="small-label">Forrás: {{ diag_counts.window_source or "system" }}</span>
+        </div>
+        <div class="status-item">
+          <div class="status-value">
+            <span>Mentett tippek</span>
+            <span>{{ saved_picks|length }}</span>
+          </div>
+          <span class="small-label">Stake: {{ "%.1f"|format(stake_pct if stake_pct else 0.0) }}%</span>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr><th>Szelvény</th><th>Oddsz</th><th>Outcome</th></tr>
+        </thead>
+        <tbody id="saved-rows"></tbody>
+      </table>
+      {% if saved_picks|length > 0 %}
+      <div class="table-actions">
+        <button id="load-more-saved" type="button" class="btn">További 20 tipp</button>
+      </div>
+      {% endif %}
+    </article>
+  </template>
+  <script>
+    const savedPicks = {{ saved_picks|tojson }};
+    const CHUNK_SIZE = 20;
+    let savedOffset = 0;
+
+    const debounce = (fn, ms = 150) => {
+      let timer;
+      return (...args) => {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn(...args), ms);
+      };
+    };
+
+    const renderSavedTips = (tbody, offset = 0) => {
+      const fragment = document.createDocumentFragment();
+      tbody.textContent = "";
+      savedPicks.slice(offset, offset + CHUNK_SIZE).forEach(pick => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${pick.home_team} vs ${pick.away_team}</td><td>${(pick.odds || 0).toFixed(2)}</td><td>${pick.outcome}</td>`;
+        fragment.appendChild(tr);
+      });
+      tbody.appendChild(fragment);
+    };
+
+    const attachSavedLoadMore = container => {
+      const tbody = container.querySelector("#saved-rows");
+      const loadBtn = container.querySelector("#load-more-saved");
+      if (!tbody || !loadBtn) return;
+      savedOffset = 0;
+      const refresh = () => {
+        renderSavedTips(tbody, savedOffset);
+        if (savedPicks.length <= CHUNK_SIZE) {
+          loadBtn.disabled = true;
+          loadBtn.textContent = "Minden tipp látható";
+        } else if (savedOffset + CHUNK_SIZE >= savedPicks.length) {
+          loadBtn.disabled = true;
+          loadBtn.textContent = "Vége";
+        } else {
+          loadBtn.disabled = false;
+          loadBtn.textContent = `Következő ${CHUNK_SIZE} tipp`;
+        }
+      };
+      refresh();
+      loadBtn.addEventListener("click", debounce(() => {
+        savedOffset = Math.min(savedOffset + CHUNK_SIZE, Math.max(savedPicks.length - CHUNK_SIZE, 0));
+        refresh();
+      }, 150));
+    };
+
+    const heavyBlocks = [
+      { btnId: "btnDetail", placeholderId: "detailPlaceholder", templateId: "detailTemplate" },
+      { btnId: "btnNews", placeholderId: "newsPlaceholder", templateId: "newsTemplate" },
+      { btnId: "btnSaved", placeholderId: "savedPlaceholder", templateId: "savedTemplate" },
+    ];
+
+    const loadHeavyBlock = info => {
+      const placeholder = document.getElementById(info.placeholderId);
+      if (!placeholder || placeholder.dataset.loaded === "1") {
+        if (placeholder) placeholder.hidden = false;
+        return;
+      }
+      const template = document.getElementById(info.templateId);
+      if (!template) return;
+      const clone = template.content.cloneNode(true);
+      placeholder.appendChild(clone);
+      placeholder.dataset.loaded = "1";
+      placeholder.hidden = false;
+      if (info.templateId === "savedTemplate") {
+        attachSavedLoadMore(placeholder);
+      }
+    };
+
+    const initDashboard = () => {
+      heavyBlocks.forEach(block => {
+        const button = document.getElementById(block.btnId);
+        if (!button) return;
+        const handler = () => {
+          loadHeavyBlock(block);
+          button.disabled = true;
+          button.textContent = "Betöltve";
+        };
+        button.addEventListener("click", debounce(handler, 150));
+      });
+    };
+
+    document.addEventListener("DOMContentLoaded", () => {
+      performance.mark("init-start");
+      requestAnimationFrame(() => {
+        initDashboard();
+        const app = document.getElementById("app");
+        const skeleton = document.getElementById("skeleton");
+        if (skeleton) {
+          skeleton.remove();
+        }
+        if (app) {
+          app.hidden = false;
+        }
+        performance.mark("init-end");
+        performance.measure("initDashboard", "init-start", "init-end");
+        const measure = performance.getEntriesByName("initDashboard").pop();
+        console.log(
+          "initDashboard",
+          measure ? measure.duration.toFixed(1) : "n/a",
+          "ms",
+          "DOM total",
+          document.getElementsByTagName("*").length
+        );
+      });
+    });
+  </script>
 </body>
 </html>
