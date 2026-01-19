@@ -243,9 +243,11 @@ _TEAM_RECENT_CACHE: dict[str, dict[str, object]] = {}
 _TRANSLATE_CACHE: dict[str, dict[str, object]] = {}
 _TEAM_ID_CACHE: dict[str, dict[str, object]] = {}
 _FIXTURE_STATS_CACHE: dict[str, dict[str, object]] = {}
+_TEAM_SQUAD_CACHE: dict[str, dict[str, object]] = {}
 _ODDS_MARKETS_DEFAULT = "h2h,totals,btts,team_totals,spreads,draw_no_bet,double_chance,alternate_totals,alternate_team_totals,alternate_spreads"
 BACKGROUND_REFRESH_SECONDS = int(os.environ.get("BACKGROUND_REFRESH_SECONDS", "600"))
 OFFLINE_FIXTURES_TTL_SECONDS = int(os.environ.get("OFFLINE_FIXTURES_TTL_SECONDS", "3600"))
+TEAM_SQUAD_TTL_SECONDS = int(os.environ.get("TEAM_SQUAD_TTL_SECONDS", "2592000"))
 
 _RESPONSE_CACHE: dict[str, object] = {"html": "", "ts": 0.0}
 _RESPONSE_LOCK = threading.Lock()
@@ -258,6 +260,7 @@ STANDINGS_REFRESH_SECONDS = int(os.environ.get("STANDINGS_REFRESH_SECONDS", "120
 ODDS_REFRESH_SECONDS = int(os.environ.get("ODDS_REFRESH_SECONDS", "60"))
 MIN_API_REFRESH_SECONDS = int(os.environ.get("MIN_API_REFRESH_SECONDS", "86400"))
 API_BACKOFF_SECONDS = int(os.environ.get("API_BACKOFF_SECONDS", "86400"))
+_TEAM_SQUAD_CACHE_FILE = Path(os.path.dirname(__file__)) / "data" / "team_squads_cache.json"
 _LAST_RSS_FETCH: float = 0.0
 _LAST_STANDINGS_FETCH: float = 0.0
 _LAST_ODDS_FETCH: float = 0.0
@@ -286,6 +289,27 @@ def _backoff_active(key: str) -> bool:
 
 def _note_backoff(key: str) -> None:
     _API_BACKOFF[key] = time.time()
+
+
+def _load_team_squad_cache() -> None:
+    global _TEAM_SQUAD_CACHE
+    if _TEAM_SQUAD_CACHE:
+        return
+    try:
+        if _TEAM_SQUAD_CACHE_FILE.exists():
+            data = json.loads(_TEAM_SQUAD_CACHE_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                _TEAM_SQUAD_CACHE = data
+    except Exception:
+        _TEAM_SQUAD_CACHE = {}
+
+
+def _save_team_squad_cache() -> None:
+    try:
+        _TEAM_SQUAD_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _TEAM_SQUAD_CACHE_FILE.write_text(json.dumps(_TEAM_SQUAD_CACHE, ensure_ascii=True), encoding="utf-8")
+    except Exception:
+        pass
 RSS_SOURCES_FILE = os.path.join(os.path.dirname(__file__), "data", "rss_sources.json")
 RSS_EXTRA_SOURCES_FILE = os.path.join(os.path.dirname(__file__), "data", "rss_sources_extra.json")
 OFFLINE_FIXTURES_FILE = os.path.join(os.path.dirname(__file__), "data", "offline_fixtures.json")
@@ -1893,6 +1917,11 @@ def _news_items_for_match(home: str, away: str, rss_items: list[dict], limit: in
     stopwords = {"afc", "fc", "cf", "sc", "ac", "cd", "ud", "rc", "bc", "cc", "if"}
     raw_tokens = [t.lower() for t in re.split(r"\W+", f"{home} {away}") if len(t) > 2]
     tokens = {t for t in raw_tokens if t not in stopwords}
+    team_ids = _team_id_map()
+    home_id = team_ids.get(_normalize_name(home))
+    away_id = team_ids.get(_normalize_name(away))
+    player_tokens = _team_squad_tokens(home_id) | _team_squad_tokens(away_id)
+    tokens |= {t for t in player_tokens if t and len(t) > 3}
     if not tokens:
         return []
     matched = []
@@ -3059,6 +3088,44 @@ def _safe_rate(value: object | None) -> float:
     return 0.0
 
 
+def _team_squad_tokens(team_id: int | None) -> set[str]:
+    if not team_id or not config.football_data_token:
+        return set()
+    _load_team_squad_cache()
+    key = str(team_id)
+    cached = _TEAM_SQUAD_CACHE.get(key)
+    if isinstance(cached, dict):
+        ts = float(cached.get("ts", 0.0))
+        if time.time() - ts < TEAM_SQUAD_TTL_SECONDS:
+            names = cached.get("names") or []
+            return {_normalize_team_name(str(name)) for name in names if name}
+    if _backoff_active("football-data"):
+        return set()
+    try:
+        response = _HTTP.get(
+            f"https://api.football-data.org/v4/teams/{team_id}",
+            headers={"X-Auth-Token": config.football_data_token},
+            timeout=12,
+        )
+        if response.status_code == 429:
+            _note_backoff("football-data")
+            return set()
+        if response.status_code != 200:
+            return set()
+        data = response.json()
+        squad = data.get("squad", []) if isinstance(data, dict) else []
+        names = []
+        for player in squad:
+            name = player.get("name") or player.get("shortName")
+            if name:
+                names.append(str(name))
+        _TEAM_SQUAD_CACHE[key] = {"ts": time.time(), "names": names}
+        _save_team_squad_cache()
+        return {_normalize_team_name(str(name)) for name in names if name}
+    except Exception:
+        return set()
+
+
 def _fixture_stats_api_football(api_key: str, fixture_id: int | None) -> dict[int, dict[str, float]]:
     if not api_key or not fixture_id or not AF_STATS_ENABLED:
         return {}
@@ -3358,12 +3425,17 @@ def _build_stat_only_picks(
         weather_factor = min(1.0, max(0.0, abs(_weather_factor(home_team)) * 10.0))
         news_score = _news_factor(match_news_items, home_team, away_team)
         form_strength = 0.7 * form_strength + 0.3 * table_strength
+        base = 0.35
         total = (
-            elo_strength * weights["elo"]
+            base
+            + elo_strength * weights["elo"]
             + form_strength * weights["form"]
+            + table_strength * weights["table"]
             + (1.0 - injury_index) * weights["injury"]
             + (1.0 - weather_factor) * weights["weather"]
+            + max(0.0, news_score) * weights["news"]
         )
+        total = max(0.0, min(1.0, total))
 
         reason_parts = []
         if elo_strength >= 0.65:
