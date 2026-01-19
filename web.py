@@ -17,6 +17,7 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 import math
+import traceback
 import requests
 import threading
 from requests.adapters import HTTPAdapter
@@ -88,6 +89,7 @@ TRANSLATE_API_URL = os.environ.get("TRANSLATE_API_URL", "").strip()
 TRANSLATE_API_KEY = os.environ.get("TRANSLATE_API_KEY", "").strip()
 TRANSLATE_SOURCE = os.environ.get("TRANSLATE_SOURCE", "auto").strip()
 TRANSLATE_TARGET = os.environ.get("TRANSLATE_TARGET", "hu").strip()
+TRANSLATE_TIMEOUT_SECONDS = float(os.environ.get("TRANSLATE_TIMEOUT_SECONDS", "4"))
 AF_STATS_ENABLED = os.environ.get("AF_STATS_ENABLED", "1") == "1"
 
 def _build_http_session() -> requests.Session:
@@ -247,6 +249,8 @@ OFFLINE_FIXTURES_TTL_SECONDS = int(os.environ.get("OFFLINE_FIXTURES_TTL_SECONDS"
 
 _RESPONSE_CACHE: dict[str, object] = {"html": "", "ts": 0.0}
 _RESPONSE_LOCK = threading.Lock()
+_REFRESH_LOCK = threading.Lock()
+_REFRESH_IN_FLIGHT = False
 RESPONSE_CACHE_TTL = int(os.environ.get("RESPONSE_CACHE_TTL", "30"))
 RSS_REFRESH_SECONDS = int(os.environ.get("RSS_REFRESH_SECONDS", "300"))
 STANDINGS_REFRESH_SECONDS = int(os.environ.get("STANDINGS_REFRESH_SECONDS", "120"))
@@ -314,8 +318,8 @@ FDCO_UK_COMP_COLUMNS = {
 }
 
 _TEMPLATE_PATHS = [
-    os.path.join(os.path.dirname(__file__), "data", "innovative_dashboard.html"),
     os.path.join(os.path.dirname(__file__), "data", "ui_template.html"),
+    os.path.join(os.path.dirname(__file__), "data", "innovative_dashboard.html"),
     os.path.join(os.path.dirname(__file__), "..", "data", "ui_template.html"),
 ]
 
@@ -552,7 +556,7 @@ def _parse_rss_items(xml_text: str) -> list[dict]:
 
 def _load_rss_sources() -> list[dict]:
     sources: dict[str, dict] = {}
-    max_sources = int(os.environ.get("RSS_MAX_SOURCES", "0"))
+    max_sources = int(os.environ.get("RSS_MAX_SOURCES", "12"))
     for path in (RSS_SOURCES_FILE, RSS_EXTRA_SOURCES_FILE):
         if not os.path.exists(path):
             continue
@@ -659,6 +663,25 @@ def _render_and_cache(force: bool = False, active_tab: str = "tips") -> bool:
     _LAST_RENDER_HASH = payload_hash
     _LAST_RENDER_TS = now
     return True
+
+
+def _trigger_refresh_async() -> None:
+    global _REFRESH_IN_FLIGHT
+    with _REFRESH_LOCK:
+        if _REFRESH_IN_FLIGHT:
+            return
+        _REFRESH_IN_FLIGHT = True
+
+    def _runner() -> None:
+        global _REFRESH_IN_FLIGHT
+        try:
+            _render_and_cache(force=True)
+        finally:
+            with _REFRESH_LOCK:
+                _REFRESH_IN_FLIGHT = False
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
 
 
 def _stable_hash(payload: dict) -> str:
@@ -1302,7 +1325,8 @@ def _fetch_standings(comp_code: str) -> list[dict]:
             return []
         rows = []
         for row in total.get("table", [])[:20]:
-            team = row.get("team", {}).get("name")
+            team_info = row.get("team", {})
+            team = team_info.get("name")
             points = row.get("points")
             position = row.get("position")
             if team and points is not None and position is not None:
@@ -1310,6 +1334,7 @@ def _fetch_standings(comp_code: str) -> list[dict]:
                     {
                         "position": position,
                         "team": team,
+                        "team_id": team_info.get("id"),
                         "points": points,
                         "played": row.get("playedGames"),
                         "won": row.get("won"),
@@ -1331,6 +1356,8 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
             "team": "",
             "win_rate": 0.0,
             "goals_for_avg": 0.0,
+            "btts_rate": None,
+            "over25_rate": None,
             "corners_avg": None,
             "cards_avg": None,
             "source": "n/a",
@@ -1341,6 +1368,8 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
             "team": team_name,
             "win_rate": 0.0,
             "goals_for_avg": 0.0,
+            "btts_rate": None,
+            "over25_rate": None,
             "corners_avg": None,
             "cards_avg": None,
             "source": "n/a",
@@ -1355,15 +1384,24 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
     league_code = _fdco_league_code(comp_hint)
     season_year = _season_for_date(datetime.now(timezone.utc).date().isoformat())
     season_code = _fdco_season_code(season_year)
-    if team_id is None:
-        team_id = _team_id_map().get(_normalize_name(team_name))
-    if team_id is None:
-        team_id = _api_football_team_id(config.api_football_key, team_name)
-    matches = _team_recent_matches_api_football(config.api_football_key, team_id, limit=5)
+    team_id_af = team_id
+    team_id_fd = None
+    if team_id_af is None:
+        team_id_fd = _team_id_map().get(_normalize_name(team_name))
+    if team_id_af is None:
+        team_id_af = _api_football_team_id(config.api_football_key, team_name)
+    table_entry: dict[str, object] | None = None
+    if comp_hint:
+        standings = _fetch_standings(comp_hint)
+        table_entry = _standings_highlight(standings, team_name)
+        if not table_entry:
+            table_entry = None
+        if team_id_fd is None and table_entry and table_entry.get("team_id"):
+            team_id_fd = table_entry.get("team_id")
+    matches = _team_recent_matches_api_football(config.api_football_key, team_id_af, limit=5)
     source = "api-football" if matches else "football-data"
     if not matches:
-        matches = _team_recent_matches_fd(config.football_data_token, team_id, limit=5)
-    table_entry: dict[str, object] | None = None
+        matches = _team_recent_matches_fd(config.football_data_token, team_id_fd, limit=5)
     if not matches and league_code:
         matches, corners_avg, cards_avg, table_entry = _fdco_team_summary(team_name, league_code, season_year, limit=5)
         if matches:
@@ -1406,8 +1444,22 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
             if table_entry is None:
                 table_entry = _local_table_entry(team_name)
     if not matches:
-        source = "n/a"
-    total = max(1, len(matches))
+        result = {
+            "team": team_name,
+            "win_rate": None,
+            "goals_for_avg": None,
+            "btts_rate": None,
+            "over25_rate": None,
+            "corners_avg": corners_avg,
+            "cards_avg": cards_avg,
+            "form_line": "",
+            "source": "n/a",
+            "matches": [],
+            "table_entry": table_entry,
+        }
+        _cache_set(_TEAM_SUMMARY_CACHE, cache_key, result)
+        return result
+    total = len(matches)
     wins = sum(1 for row in matches if row.get("result") == "W")
     goals_for = sum(row.get("gf", 0) for row in matches)
     btts_hits = sum(1 for row in matches if row.get("gf", 0) > 0 and row.get("ga", 0) > 0)
@@ -1419,7 +1471,7 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
         cards_values = []
         for row in matches:
             fixture_id = row.get("fixture_id")
-            team_id_value = row.get("team_id") or team_id
+            team_id_value = row.get("team_id") or team_id_af
             if not fixture_id or not team_id_value:
                 continue
             try:
@@ -1542,6 +1594,7 @@ def _ensure_pick_fields(pick: dict | None) -> dict | None:
     pick.setdefault("score", 0.0)
     pick.setdefault("odds", 0.0)
     pick.setdefault("market_label", "")
+    pick.setdefault("commence_time", "")
     return pick
 
 
@@ -1550,6 +1603,8 @@ def _placeholder_summary() -> dict:
         "team": "Frissítés alatt",
         "win_rate": 0.0,
         "goals_for_avg": 0.0,
+        "btts_rate": None,
+        "over25_rate": None,
         "corners_avg": None,
         "cards_avg": None,
         "source": "n/a",
@@ -1665,7 +1720,7 @@ def _fetch_rss_items() -> list[dict]:
                     items.append(item)
         except Exception:
             pass
-    max_items = int(os.environ.get("RSS_MAX_ITEMS", "0"))
+    max_items = int(os.environ.get("RSS_MAX_ITEMS", "80"))
     if max_items > 0:
         items = items[:max_items]
 
@@ -1674,33 +1729,62 @@ def _fetch_rss_items() -> list[dict]:
     return items
 
 
+def _translate_via_google(text: str) -> str:
+    try:
+        response = _HTTP.get(
+            "https://translate.googleapis.com/translate_a/single",
+            params={
+                "client": "gtx",
+                "sl": TRANSLATE_SOURCE or "auto",
+                "tl": TRANSLATE_TARGET or "hu",
+                "dt": "t",
+                "q": text,
+            },
+            timeout=TRANSLATE_TIMEOUT_SECONDS,
+        )
+        if response.status_code != 200:
+            return text
+        data = response.json()
+        if not isinstance(data, list) or not data:
+            return text
+        chunks: list[str] = []
+        for item in data[0]:
+            if isinstance(item, list) and item:
+                chunks.append(str(item[0]))
+        translated = "".join(chunks).strip()
+        return translated or text
+    except Exception:
+        return text
+
+
 def _translate_text(text: str) -> str:
     if not text:
-        return text
-    if not TRANSLATE_API_URL:
         return text
     cache_key = text.strip()
     cached = _cache_get(_TRANSLATE_CACHE, cache_key, 86400)
     if isinstance(cached, str):
         return cached
-    payload = {
-        "q": text,
-        "source": TRANSLATE_SOURCE or "auto",
-        "target": TRANSLATE_TARGET or "hu",
-        "format": "text",
-    }
-    if TRANSLATE_API_KEY:
-        payload["api_key"] = TRANSLATE_API_KEY
-    try:
-        response = requests.post(TRANSLATE_API_URL, json=payload, timeout=12)
-        if response.status_code == 200:
-            data = response.json()
-            translated = data.get("translatedText") or data.get("translation") or text
-            _cache_set(_TRANSLATE_CACHE, cache_key, translated)
-            return translated
-    except Exception:
-        pass
-    return text
+    if TRANSLATE_API_URL:
+        payload = {
+            "q": text,
+            "source": TRANSLATE_SOURCE or "auto",
+            "target": TRANSLATE_TARGET or "hu",
+            "format": "text",
+        }
+        if TRANSLATE_API_KEY:
+            payload["api_key"] = TRANSLATE_API_KEY
+        try:
+            response = requests.post(TRANSLATE_API_URL, json=payload, timeout=TRANSLATE_TIMEOUT_SECONDS)
+            if response.status_code == 200:
+                data = response.json()
+                translated = data.get("translatedText") or data.get("translation") or text
+                _cache_set(_TRANSLATE_CACHE, cache_key, translated)
+                return translated
+        except Exception:
+            pass
+    translated = _translate_via_google(text)
+    _cache_set(_TRANSLATE_CACHE, cache_key, translated)
+    return translated
 
 
 def _news_summary_from_items(items: list[dict], limit: int = 8) -> str:
@@ -1723,18 +1807,25 @@ def _news_blocks(picks: list[dict], rss_items: list[dict], limit: int = 10) -> l
     blocks = []
     if not picks or not rss_items:
         return blocks
+    max_translate = int(os.environ.get("TRANSLATE_MAX_ITEMS", "3"))
     for pick in picks:
         home = pick.get("home_team", "")
         away = pick.get("away_team", "")
         items = _news_items_for_match(home, away, rss_items, limit=limit)
         summary = _news_summary_text(home, away, len(items))
         translated_items = []
-        for item in items:
+        for idx, item in enumerate(items):
+            if idx < max_translate:
+                title_hu = _translate_text(str(item.get("title", "")))
+                summary_hu = _translate_text(str(item.get("summary", "")))
+            else:
+                title_hu = str(item.get("title", ""))
+                summary_hu = str(item.get("summary", ""))
             translated_items.append(
                 {
                     **item,
-                    "title_hu": _translate_text(str(item.get("title", ""))),
-                    "summary_hu": _translate_text(str(item.get("summary", ""))),
+                    "title_hu": title_hu,
+                    "summary_hu": summary_hu,
                 }
             )
         blocks.append(
@@ -2415,15 +2506,9 @@ def _fetch_standings_api_football(api_key: str, league_id: int | None, season: i
 
 
 def _diagnostics_fixtures(token: str, competitions: list[dict], hours: int = 24) -> dict:
-    comps_count = 0
-    fixtures = []
-    for comp in competitions:
-        code = comp.get("code")
-        if not code:
-            continue
-        fixtures.extend(_fetch_upcoming_fixtures_fd(token, code, hours))
-    comps_count = len(fixtures)
-    all_count = len(_fetch_upcoming_fixtures_fd_all(token, hours))
+    all_fixtures = _fetch_upcoming_fixtures_fd_all(token, hours)
+    comps_count = len(all_fixtures)
+    all_count = len(all_fixtures)
     api_football_count = len(_fetch_upcoming_fixtures_api_football(config.api_football_key, hours))
     _, date_from, date_to = _fixture_window(hours)
     return {
@@ -2894,6 +2979,14 @@ def _stat_value(value: object) -> float | None:
     return None
 
 
+def _safe_rate(value: object | None) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    return 0.0
+
+
 def _fixture_stats_api_football(api_key: str, fixture_id: int | None) -> dict[int, dict[str, float]]:
     if not api_key or not fixture_id or not AF_STATS_ENABLED:
         return {}
@@ -3138,8 +3231,8 @@ def _build_stat_only_picks(
 
         home_summary = _summary_dict(home_team, match.get("home_id"))
         away_summary = _summary_dict(away_team, match.get("away_id"))
-        btts_rate = (home_summary.get("btts_rate", 0.0) + away_summary.get("btts_rate", 0.0)) / 2.0
-        over25_rate = (home_summary.get("over25_rate", 0.0) + away_summary.get("over25_rate", 0.0)) / 2.0
+        btts_rate = (_safe_rate(home_summary.get("btts_rate")) + _safe_rate(away_summary.get("btts_rate"))) / 2.0
+        over25_rate = (_safe_rate(home_summary.get("over25_rate")) + _safe_rate(away_summary.get("over25_rate"))) / 2.0
         home_form = str(home_summary.get("form_line") or "")
         away_form = str(away_summary.get("form_line") or "")
         home_row = _standings_highlight(comp_standings, home_team, match.get("home_id"))
@@ -3259,8 +3352,11 @@ def _build_stat_only_picks(
             "risk": _risk_label(total),
             "explain_hu": reason_text,
         }
-        picks.append(pick)
+    picks.append(pick)
     picks.sort(key=lambda item: item["score"], reverse=True)
+    limit = int(os.environ.get("STAT_ONLY_PICK_LIMIT", "2"))
+    if limit > 0:
+        picks = picks[:limit]
     return picks
 
 
@@ -3288,8 +3384,10 @@ def _fetch_public_fixtures(
     fixtures: list[dict] = []
     allowed_codes: set[str] = set()
     allowed_pairs: set[tuple[str, str]] = set()
-    fd_map = _fd_competition_map(competitions)
-    for comp in competitions:
+    max_comp = int(os.environ.get("FD_PUBLIC_COMP_LIMIT", "8"))
+    public_comps = competitions[:max_comp]
+    fd_map = _fd_competition_map(public_comps)
+    for comp in public_comps:
         code = str(comp.get("code") or "")
         name = str(comp.get("name") or "")
         area = str(comp.get("area", {}).get("name") or "")
@@ -3297,12 +3395,6 @@ def _fetch_public_fixtures(
             allowed_codes.add(code)
         if name and area:
             allowed_pairs.add((_normalize_comp(name), _normalize_comp(area)))
-    for comp in competitions:
-        code = comp.get("code")
-        if not code:
-            continue
-        standings_by_comp[code] = _fetch_standings_fd(config.football_data_token, code)
-        fixtures.extend(_fetch_upcoming_fixtures_fd(config.football_data_token, code, window_hours))
     fixtures.extend(_fetch_upcoming_fixtures_fd_all(config.football_data_token, window_hours))
     fixtures.extend(_fetch_upcoming_fixtures_api_football(config.api_football_key, window_hours))
     fixtures = _dedupe_fixtures(fixtures)
@@ -3331,6 +3423,15 @@ def _fetch_public_fixtures(
                     continue
             # If we cannot match the competition to known list, skip.
         fixtures = filtered
+    if allowed_codes:
+        comp_codes: list[str] = []
+        for item in fixtures:
+            code = str(item.get("fd_code") or item.get("comp_code") or "")
+            if code and code in allowed_codes and code not in comp_codes:
+                comp_codes.append(code)
+        standings_limit = int(os.environ.get("FD_STANDINGS_LIMIT", "6"))
+        for code in comp_codes[:standings_limit]:
+            standings_by_comp[code] = _fetch_standings_fd(config.football_data_token, code)
     if STAT_ONLY_MAX_FIXTURES > 0 and len(fixtures) > STAT_ONLY_MAX_FIXTURES:
         fixtures = fixtures[:STAT_ONLY_MAX_FIXTURES]
     offline = _load_offline_fixtures()
@@ -3938,6 +4039,10 @@ def _fetch_odds_matches(api_key: str, keys: list[str] | None = None) -> tuple[li
             return list(_ODDS_CACHE.get("matches", [])), _ODDS_CACHE.get("error")
     keys = keys or _fetch_sports_keys(api_key)
     max_sports = int(os.environ.get("ODDS_MAX_SPORTS", "0"))
+    if max_sports <= 0:
+        max_sports = 3
+    else:
+        max_sports = min(max_sports, 3)
     if max_sports > 0:
         keys = keys[:max_sports]
     markets = ",".join(_market_keys())
@@ -3984,22 +4089,43 @@ def _fetch_odds_matches(api_key: str, keys: list[str] | None = None) -> tuple[li
 @app.route('/')
 def dashboard():
     t0 = time.perf_counter()
-    if not _RESPONSE_CACHE.get("html"):
-        _render_and_cache(force=True)
-    with _RESPONSE_LOCK:
-        html = _RESPONSE_CACHE.get("html", "<html><body>Frissítés folyamatban...</body></html>")
-    dt = (time.perf_counter() - t0) * 1000
-    if dt > 5:
-        print(f"[SLOW] dashboard() {dt:.1f} ms")
-    return html
+    try:
+        if request.args.get("refresh") == "1":
+            _render_and_cache(force=True)
+        elif not _RESPONSE_CACHE.get("html"):
+            _trigger_refresh_async()
+        with _RESPONSE_LOCK:
+            html = _RESPONSE_CACHE.get("html", "")
+        if not html:
+            html = (
+                "<html><head><meta http-equiv=\"refresh\" content=\"5\"></head>"
+                "<body>Frissites folyamatban...</body></html>"
+            )
+        dt = (time.perf_counter() - t0) * 1000
+        if dt > 5:
+            print(f"[SLOW] dashboard() {dt:.1f} ms")
+        return html
+    except Exception:
+        print("[ERROR] dashboard render failed")
+        print(traceback.format_exc())
+        return ("Internal Server Error", 500)
 
 
 @app.route("/api/dashboard")
 def api_dashboard():
-    if not _LAST_PAYLOAD:
-        _render_and_cache(force=True)
-    payload = _LAST_PAYLOAD or {}
-    return jsonify(payload)
+    try:
+        if request.args.get("refresh") == "1":
+            _render_and_cache(force=True)
+            payload = _LAST_PAYLOAD or {}
+            return jsonify(payload)
+        if _LAST_PAYLOAD:
+            return jsonify(_LAST_PAYLOAD)
+        _trigger_refresh_async()
+        return jsonify({"status": "warming"}), 202
+    except Exception:
+        print("[ERROR] api_dashboard render failed")
+        print(traceback.format_exc())
+        return ("Internal Server Error", 500)
 
 
 def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = True):
@@ -4242,6 +4368,8 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
             odds_error = cached.get("odds_error")
             cached_updated_at = cached.get("updated_at")
             best_pick, target_matches = _enforce_tip_presence(cached.get("best_pick"), raw_target_matches)
+            best_pick = _enrich_pick(best_pick) if best_pick else None
+            target_matches = [_enrich_pick(item) for item in target_matches] if target_matches else []
     saved_picks = _list_saved_picks(db)
     stake_pct = _stake_from_score(best_pick.get("score") if best_pick else None)
 
