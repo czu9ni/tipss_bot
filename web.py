@@ -251,10 +251,13 @@ _RESPONSE_CACHE: dict[str, object] = {"html": "", "ts": 0.0}
 _RESPONSE_LOCK = threading.Lock()
 _REFRESH_LOCK = threading.Lock()
 _REFRESH_IN_FLIGHT = False
+_API_BACKOFF: dict[str, float] = {}
 RESPONSE_CACHE_TTL = int(os.environ.get("RESPONSE_CACHE_TTL", "30"))
 RSS_REFRESH_SECONDS = int(os.environ.get("RSS_REFRESH_SECONDS", "300"))
 STANDINGS_REFRESH_SECONDS = int(os.environ.get("STANDINGS_REFRESH_SECONDS", "120"))
 ODDS_REFRESH_SECONDS = int(os.environ.get("ODDS_REFRESH_SECONDS", "60"))
+MIN_API_REFRESH_SECONDS = int(os.environ.get("MIN_API_REFRESH_SECONDS", "86400"))
+API_BACKOFF_SECONDS = int(os.environ.get("API_BACKOFF_SECONDS", "86400"))
 _LAST_RSS_FETCH: float = 0.0
 _LAST_STANDINGS_FETCH: float = 0.0
 _LAST_ODDS_FETCH: float = 0.0
@@ -274,6 +277,15 @@ def _reset_runtime_caches() -> None:
         _SPORTS_CACHE["keys"] = []
         _LOCAL_DB_CACHE["matches"] = None
         _LOCAL_DB_CACHE["standings"] = None
+
+
+def _backoff_active(key: str) -> bool:
+    ts = _API_BACKOFF.get(key)
+    return bool(ts and (time.time() - ts) < API_BACKOFF_SECONDS)
+
+
+def _note_backoff(key: str) -> None:
+    _API_BACKOFF[key] = time.time()
 RSS_SOURCES_FILE = os.path.join(os.path.dirname(__file__), "data", "rss_sources.json")
 RSS_EXTRA_SOURCES_FILE = os.path.join(os.path.dirname(__file__), "data", "rss_sources_extra.json")
 OFFLINE_FIXTURES_FILE = os.path.join(os.path.dirname(__file__), "data", "offline_fixtures.json")
@@ -449,6 +461,17 @@ def _local_team_matches(team_name: str, limit: int = 5) -> list[dict]:
         )
     rows.sort(key=lambda row: (_parse_iso_date(row.get("date")) or datetime.min), reverse=True)
     return rows[:limit]
+
+
+def _local_team_rates(team_name: str) -> tuple[float, float, str]:
+    rows = _local_team_matches(team_name, limit=5)
+    if not rows:
+        return 0.0, 0.0, ""
+    total = max(1, len(rows))
+    btts_hits = sum(1 for row in rows if (row.get("gf") or 0) > 0 and (row.get("ga") or 0) > 0)
+    over25_hits = sum(1 for row in rows if ((row.get("gf") or 0) + (row.get("ga") or 0)) >= 3)
+    form_line = _form_line(rows)
+    return btts_hits / total, over25_hits / total, form_line
 
 
 def _record_local_result(table: dict[str, dict[str, object]], team_name: str, gf: int, ga: int) -> None:
@@ -961,12 +984,17 @@ def _fetch_competitions_fd(token: str) -> list[dict]:
         return cached
     if not token:
         return []
+    if _backoff_active("football-data"):
+        return []
     try:
         response = _HTTP.get(
             "https://api.football-data.org/v4/competitions",
             headers={"X-Auth-Token": token},
             timeout=12,
         )
+        if response.status_code == 429:
+            _note_backoff("football-data")
+            return []
         if response.status_code != 200:
             return []
         competitions = [comp for comp in response.json().get("competitions", []) if comp.get("code")]
@@ -1168,6 +1196,11 @@ def _fetch_clubelo(team_name: str) -> float:
     return 1500.0
 
 
+def _fast_clubelo(team_name: str) -> float:
+    norm = team_name.replace(" FC", "").replace("AFC ", "").strip().replace(" ", "_")
+    return _ELO_CACHE.get(norm, 1500.0)
+
+
 def _model_probs(
     elo_diff: float,
     form_diff: float,
@@ -1304,6 +1337,8 @@ def _fetch_standings(comp_code: str) -> list[dict]:
         return []
     if comp_code in _STANDINGS_CACHE:
         return _STANDINGS_CACHE[comp_code]
+    if _backoff_active("football-data"):
+        return []
     try:
         headers = {"X-Auth-Token": config.football_data_token}
         response = _HTTP.get(
@@ -1311,6 +1346,9 @@ def _fetch_standings(comp_code: str) -> list[dict]:
             headers=headers,
             timeout=12,
         )
+        if response.status_code == 429:
+            _note_backoff("football-data")
+            return []
         if response.status_code != 200:
             return []
         data = response.json()
@@ -1384,10 +1422,10 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
     league_code = _fdco_league_code(comp_hint)
     season_year = _season_for_date(datetime.now(timezone.utc).date().isoformat())
     season_code = _fdco_season_code(season_year)
+    corners_avg = None
+    cards_avg = None
     team_id_af = team_id
-    team_id_fd = None
-    if team_id_af is None:
-        team_id_fd = _team_id_map().get(_normalize_name(team_name))
+    team_id_fd = _team_id_map().get(_normalize_name(team_name))
     if team_id_af is None:
         team_id_af = _api_football_team_id(config.api_football_key, team_name)
     table_entry: dict[str, object] | None = None
@@ -1398,6 +1436,8 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
             table_entry = None
         if team_id_fd is None and table_entry and table_entry.get("team_id"):
             team_id_fd = table_entry.get("team_id")
+    if team_id_fd is None and team_id is not None and comp_hint:
+        team_id_fd = team_id
     matches = _team_recent_matches_api_football(config.api_football_key, team_id_af, limit=5)
     source = "api-football" if matches else "football-data"
     if not matches:
@@ -1850,11 +1890,9 @@ def _news_items_for_match(home: str, away: str, rss_items: list[dict], limit: in
         return []
     home_norm = _normalize_team_name(home)
     away_norm = _normalize_team_name(away)
-    raw_tokens = [t for t in re.split(r"\W+", f"{home} {away}") if len(t) > 2]
-    tokens = [t.lower() for t in raw_tokens]
-    norm_tokens = [t for t in re.split(r"\W+", f"{home_norm} {away_norm}") if len(t) > 2]
-    tokens.extend(norm_tokens)
-    tokens = list({t for t in tokens if len(t) > 2})
+    stopwords = {"afc", "fc", "cf", "sc", "ac", "cd", "ud", "rc", "bc", "cc", "if"}
+    raw_tokens = [t.lower() for t in re.split(r"\W+", f"{home} {away}") if len(t) > 2]
+    tokens = {t for t in raw_tokens if t not in stopwords}
     if not tokens:
         return []
     matched = []
@@ -1865,7 +1903,8 @@ def _news_items_for_match(home: str, away: str, rss_items: list[dict], limit: in
         text = f"{title} {summary}".strip()
         if not text:
             continue
-        if any(tok in text for tok in tokens):
+        text_tokens = {t for t in re.split(r"\W+", text) if len(t) > 2}
+        if tokens.intersection(text_tokens):
             key = (item.get("title"), item.get("source"))
             if key in seen:
                 continue
@@ -2555,6 +2594,8 @@ def _fixture_window(hours: int) -> tuple[datetime, str, str]:
 def _fetch_upcoming_fixtures_api_football(api_key: str, hours: int = 24, limit: int = 40) -> list[dict]:
     if not api_key:
         return []
+    if _backoff_active("api-football"):
+        return []
     cache_key = f"{hours}:{limit}"
     cached = _cache_get(_AF_FIXTURES_CACHE, cache_key, AF_FIXTURES_TTL_SECONDS)
     if isinstance(cached, list):
@@ -2571,9 +2612,13 @@ def _fetch_upcoming_fixtures_api_football(api_key: str, hours: int = 24, limit: 
                 timeout=12,
             )
             if response.status_code != 200:
+                if response.status_code == 429:
+                    _note_backoff("api-football")
                 return []
             data = response.json()
             if data.get("errors"):
+                if data.get("errors", {}).get("requests"):
+                    _note_backoff("api-football")
                 return []
             return data.get("response", [])
 
@@ -2638,6 +2683,8 @@ def _fetch_upcoming_fixtures_fd_all(token: str, hours: int = 24, limit: int = 40
     cached = _cache_get(_FD_FIXTURES_CACHE, cache_key, FD_FIXTURES_TTL_SECONDS)
     if isinstance(cached, list):
         return cached
+    if _backoff_active("football-data"):
+        return []
     try:
         now, date_from, date_to = _fixture_window(hours)
         response = _HTTP.get(
@@ -2646,6 +2693,9 @@ def _fetch_upcoming_fixtures_fd_all(token: str, hours: int = 24, limit: int = 40
             params={"status": "SCHEDULED,TIMED", "dateFrom": date_from, "dateTo": date_to},
             timeout=12,
         )
+        if response.status_code == 429:
+            _note_backoff("football-data")
+            return []
         if response.status_code != 200:
             return []
         fixtures = []
@@ -2700,6 +2750,8 @@ def _fetch_upcoming_fixtures_fd(token: str, comp_code: str, hours: int = 24, lim
     cached = _cache_get(_FD_FIXTURES_CACHE, cache_key, FD_FIXTURES_TTL_SECONDS)
     if isinstance(cached, list):
         return cached
+    if _backoff_active("football-data"):
+        return []
     try:
         now, date_from, date_to = _fixture_window(hours)
         response = _HTTP.get(
@@ -2708,6 +2760,9 @@ def _fetch_upcoming_fixtures_fd(token: str, comp_code: str, hours: int = 24, lim
             params={"status": "SCHEDULED,TIMED", "dateFrom": date_from, "dateTo": date_to},
             timeout=12,
         )
+        if response.status_code == 429:
+            _note_backoff("football-data")
+            return []
         if response.status_code != 200:
             return []
         fixtures = []
@@ -2810,6 +2865,8 @@ def _team_recent_matches_fd(token: str, team_id: int | None, limit: int = 5) -> 
     cached = _cache_get(_TEAM_RECENT_CACHE, cache_key, TEAM_SUMMARY_TTL_SECONDS)
     if isinstance(cached, list):
         return cached[:limit]
+    if _backoff_active("football-data"):
+        return []
     try:
         response = _HTTP.get(
             f"https://api.football-data.org/v4/teams/{team_id}/matches",
@@ -2817,6 +2874,9 @@ def _team_recent_matches_fd(token: str, team_id: int | None, limit: int = 5) -> 
             params={"status": "FINISHED", "limit": str(limit)},
             timeout=12,
         )
+        if response.status_code == 429:
+            _note_backoff("football-data")
+            return []
         if response.status_code != 200:
             return []
         rows = []
@@ -2868,6 +2928,8 @@ def _team_recent_matches_fd(token: str, team_id: int | None, limit: int = 5) -> 
 def _team_recent_matches_api_football(api_key: str, team_id: int | None, limit: int = 5) -> list[dict]:
     if not api_key or not team_id:
         return []
+    if _backoff_active("api-football"):
+        return []
     cache_key = f"af:{team_id}"
     cached = _cache_get(_TEAM_RECENT_CACHE, cache_key, TEAM_SUMMARY_TTL_SECONDS)
     if isinstance(cached, list):
@@ -2887,6 +2949,8 @@ def _team_recent_matches_api_football(api_key: str, team_id: int | None, limit: 
             timeout=12,
         )
         if response.status_code != 200:
+            if response.status_code == 429:
+                _note_backoff("api-football")
             return []
         data = response.json()
         errors = data.get("errors") or {}
@@ -2896,6 +2960,8 @@ def _team_recent_matches_api_football(api_key: str, team_id: int | None, limit: 
             to_date = datetime.now(timezone.utc).date()
             from_date = (to_date - timedelta(days=180)).isoformat()
             season = _season_for_date(to_date.isoformat())
+            fallback_season = min(season, max(2022, to_date.year - 2))
+            season = fallback_season
             response = _HTTP.get(
                 "https://v3.football.api-sports.io/fixtures",
                 headers={"x-apisports-key": api_key},
@@ -2910,8 +2976,14 @@ def _team_recent_matches_api_football(api_key: str, team_id: int | None, limit: 
                 timeout=12,
             )
             if response.status_code != 200:
+                if response.status_code == 429:
+                    _note_backoff("api-football")
                 return []
-            items = response.json().get("response", [])
+            data = response.json()
+            if data.get("errors", {}).get("requests"):
+                _note_backoff("api-football")
+                return []
+            items = data.get("response", [])
         rows = []
         for item in items:
             fixture = item.get("fixture", {})
@@ -3219,22 +3291,22 @@ def _build_stat_only_picks(
             continue
         match_news_items = _news_items_for_match(home_team, away_team, news_items, limit=8)
         news_count = len(match_news_items)
-        elo_home = _fetch_clubelo(home_team)
-        elo_away = _fetch_clubelo(away_team)
+        elo_home = _fast_clubelo(home_team)
+        elo_away = _fast_clubelo(away_team)
         elo_diff = max(-1.0, min(1.0, (elo_home - elo_away) / 400.0))
-        form_home_ppg = _team_ppg_fd(config.football_data_token, match.get("home_id"))
-        form_away_ppg = _team_ppg_fd(config.football_data_token, match.get("away_id"))
-        form_diff = max(-1.0, min(1.0, (form_home_ppg - form_away_ppg) / 3.0))
+        form_home_ppg = 1.5
+        form_away_ppg = 1.5
+        form_diff = 0.0
         table_home = table_scores.get(home_team, 0.5)
         table_away = table_scores.get(away_team, 0.5)
         table_diff = max(-1.0, min(1.0, table_home - table_away))
 
-        home_summary = _summary_dict(home_team, match.get("home_id"))
-        away_summary = _summary_dict(away_team, match.get("away_id"))
-        btts_rate = (_safe_rate(home_summary.get("btts_rate")) + _safe_rate(away_summary.get("btts_rate"))) / 2.0
-        over25_rate = (_safe_rate(home_summary.get("over25_rate")) + _safe_rate(away_summary.get("over25_rate"))) / 2.0
-        home_form = str(home_summary.get("form_line") or "")
-        away_form = str(away_summary.get("form_line") or "")
+        home_btts, home_over25, home_form = _local_team_rates(home_team)
+        away_btts, away_over25, away_form = _local_team_rates(away_team)
+        btts_rate = (home_btts + away_btts) / 2.0
+        over25_rate = (home_over25 + away_over25) / 2.0
+        home_form = str(home_form or "")
+        away_form = str(away_form or "")
         home_row = _standings_highlight(comp_standings, home_team, match.get("home_id"))
         away_row = _standings_highlight(comp_standings, away_team, match.get("away_id"))
         home_pos = home_row.get("position") if home_row else None
@@ -3355,6 +3427,49 @@ def _build_stat_only_picks(
     picks.append(pick)
     picks.sort(key=lambda item: item["score"], reverse=True)
     limit = int(os.environ.get("STAT_ONLY_PICK_LIMIT", "2"))
+    if limit > 0 and len(picks) < limit:
+        existing_keys = {item.get("match_key") for item in picks}
+        for match in fixtures:
+            key = _match_key(match)
+            if key in existing_keys:
+                continue
+            home_team = match.get("home_team", "")
+            away_team = match.get("away_team", "")
+            if not home_team or not away_team:
+                continue
+            fallback_pick = {
+                "match_key": key,
+                "home_team": home_team,
+                "away_team": away_team,
+                "competition": _match_competition(match),
+                "fd_code": match.get("fd_code"),
+                "home_id": match.get("home_id"),
+                "away_id": match.get("away_id"),
+                "season": match.get("season"),
+                "sport_key": match.get("sport_key", ""),
+                "commence_time": match.get("commence_time", ""),
+                "market_key": "h2h",
+                "market_label": "1X2 (odds nelkul)",
+                "outcome": "Alapajanlas",
+                "line": None,
+                "odds": None,
+                "distance": 0.0,
+                "score": 0.2,
+                "elo_strength": 0.5,
+                "form_strength": 0.5,
+                "market_diff": 0.0,
+                "injury_index": 0.0,
+                "weather_factor": 0.0,
+                "news_score": 0.0,
+                "model_prob": 0.5,
+                "implied_prob": None,
+                "risk": "red",
+                "explain_hu": "Magyarazat: keves adat, alapajanlas.",
+            }
+            picks.append(fallback_pick)
+            existing_keys.add(key)
+            if len(picks) >= limit:
+                break
     if limit > 0:
         picks = picks[:limit]
     return picks
@@ -3453,12 +3568,17 @@ def _fetch_standings_fd(token: str, comp_code: str, limit: int = 10) -> list[dic
     cached = _cache_get(_FD_STANDINGS_CACHE, cache_key, FD_STANDINGS_TTL_SECONDS)
     if isinstance(cached, list):
         return cached
+    if _backoff_active("football-data"):
+        return []
     try:
         response = _HTTP.get(
             f"https://api.football-data.org/v4/competitions/{comp_code}/standings",
             headers={"X-Auth-Token": token},
             timeout=12,
         )
+        if response.status_code == 429:
+            _note_backoff("football-data")
+            return []
         if response.status_code != 200:
             return []
         data = response.json()
@@ -4156,6 +4276,12 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
         if cached_dt:
             age = (datetime.now(timezone.utc) - cached_dt).total_seconds()
             if age < REFRESH_COOLDOWN_SECONDS:
+                refresh_requested = False
+    if refresh_requested and cached_updated_at and MIN_API_REFRESH_SECONDS > 0:
+        cached_dt = _parse_iso_datetime(cached_updated_at)
+        if cached_dt:
+            age = (datetime.now(timezone.utc) - cached_dt).total_seconds()
+            if age < MIN_API_REFRESH_SECONDS:
                 refresh_requested = False
     matches = list_matches(db)
     points_map = table(matches)
