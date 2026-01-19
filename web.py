@@ -345,6 +345,7 @@ def _note_squad_fetch() -> None:
     _save_team_squad_cache()
 RSS_SOURCES_FILE = os.path.join(os.path.dirname(__file__), "data", "rss_sources.json")
 RSS_EXTRA_SOURCES_FILE = os.path.join(os.path.dirname(__file__), "data", "rss_sources_extra.json")
+CLUB_RSS_MAP_FILE = os.path.join(os.path.dirname(__file__), "data", "club_rss_map.json")
 OFFLINE_FIXTURES_FILE = os.path.join(os.path.dirname(__file__), "data", "offline_fixtures.json")
 LOCAL_DB_TTL_SECONDS = int(os.environ.get("LOCAL_DB_TTL_SECONDS", "300"))
 _LOCAL_DB_CACHE: dict[str, object] = {"matches": None, "standings": None, "ts": 0.0}
@@ -661,6 +662,38 @@ def _load_rss_sources() -> list[dict]:
     if max_sources > 0:
         return result[:max_sources]
     return result
+
+
+def _load_club_rss_map() -> dict[str, list[str]]:
+    if not os.path.exists(CLUB_RSS_MAP_FILE):
+        return {}
+    try:
+        with open(CLUB_RSS_MAP_FILE, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+            if isinstance(data, dict):
+                cleaned: dict[str, list[str]] = {}
+                for key, value in data.items():
+                    if not key or not isinstance(value, list):
+                        continue
+                    urls = [str(item).strip() for item in value if str(item).strip()]
+                    if urls:
+                        cleaned[str(key)] = urls
+                return cleaned
+    except Exception:
+        return {}
+    return {}
+
+
+def _team_rss_sources(team_names: list[str]) -> list[dict]:
+    mapping = _load_club_rss_map()
+    if not mapping:
+        return []
+    sources: list[dict] = []
+    for team in team_names:
+        urls = mapping.get(team) or []
+        for url in urls:
+            sources.append({"url": url, "weight": 1.0, "label": f"{team} official"})
+    return sources
 
 
 def _load_offline_fixtures() -> list[dict]:
@@ -1794,7 +1827,7 @@ def _within_hours(match: dict, hours: int) -> bool:
         return False
 
 
-def _fetch_rss_items() -> list[dict]:
+def _fetch_rss_items(team_names: list[str] | None = None) -> list[dict]:
     if FAST_MODE:
         return []
     now = time.time()
@@ -1803,7 +1836,20 @@ def _fetch_rss_items() -> list[dict]:
         return list(_RSS_CACHE.get("items", []))
 
     items: list[dict] = []
-    for source in _load_rss_sources():
+    sources = _load_rss_sources()
+    if team_names:
+        sources.extend(_team_rss_sources(team_names))
+    if sources:
+        seen_urls = set()
+        deduped = []
+        for source in sources:
+            url = str(source.get("url") or "")
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            deduped.append(source)
+        sources = deduped
+    for source in sources:
         url = source.get("url", "")
         if not isinstance(url, str) or not url.startswith(("http://", "https://")):
             continue
@@ -4426,12 +4472,29 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                 odds_error = "Odds API kulcs hianyzik (odds nelkuli ajanlas)"
                 data = []
                 eligible = []
-                rss_items = _fetch_rss_items()
                 fixtures, standings_by_comp = _fetch_public_fixtures(competitions, window_hours)
+                rss_team_names = []
+                for item in fixtures:
+                    home = item.get("home_team")
+                    away = item.get("away_team")
+                    if home:
+                        rss_team_names.append(str(home))
+                    if away:
+                        rss_team_names.append(str(away))
+                rss_items = _fetch_rss_items(rss_team_names)
                 picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                 if not picks:
                     fallback_hours = 24
                     fixtures, standings_by_comp = _fetch_public_fixtures(competitions, fallback_hours)
+                    rss_team_names = []
+                    for item in fixtures:
+                        home = item.get("home_team")
+                        away = item.get("away_team")
+                        if home:
+                            rss_team_names.append(str(home))
+                        if away:
+                            rss_team_names.append(str(away))
+                    rss_items = _fetch_rss_items(rss_team_names)
                     picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                     if picks:
                         odds_error = "Odds API kulcs hianyzik (odds nelkuli ajanlas, 24 oras ablak)"
@@ -4458,12 +4521,29 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                 if not use_odds:
                     if not odds_error:
                         odds_error = "Odds API adat nem elerheto (odds nelkuli ajanlas)"
-                    rss_items = _fetch_rss_items()
                     fixtures, standings_by_comp = _fetch_public_fixtures(competitions, window_hours)
+                    rss_team_names = []
+                    for item in fixtures:
+                        home = item.get("home_team")
+                        away = item.get("away_team")
+                        if home:
+                            rss_team_names.append(str(home))
+                        if away:
+                            rss_team_names.append(str(away))
+                    rss_items = _fetch_rss_items(rss_team_names)
                     picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                     if not picks:
                         fallback_hours = 24
                         fixtures, standings_by_comp = _fetch_public_fixtures(competitions, fallback_hours)
+                        rss_team_names = []
+                        for item in fixtures:
+                            home = item.get("home_team")
+                            away = item.get("away_team")
+                            if home:
+                                rss_team_names.append(str(home))
+                            if away:
+                                rss_team_names.append(str(away))
+                        rss_items = _fetch_rss_items(rss_team_names)
                         picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items)
                         if picks:
                             odds_error = "Odds API adat nem elerheto (24 oras ablak)"
@@ -4499,7 +4579,15 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                         eligible.append(match)
             if eligible:
                 odds_count = len(eligible)
-                rss_items = _fetch_rss_items()
+                rss_team_names = []
+                for item in eligible:
+                    home = item.get("home_team")
+                    away = item.get("away_team")
+                    if home:
+                        rss_team_names.append(str(home))
+                    if away:
+                        rss_team_names.append(str(away))
+                rss_items = _fetch_rss_items(rss_team_names)
                 picks: list[dict] = []
                 for match in eligible:
                     match_dt = _parse_match_dt(match)
