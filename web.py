@@ -248,6 +248,7 @@ _ODDS_MARKETS_DEFAULT = "h2h,totals,btts,team_totals,spreads,draw_no_bet,double_
 BACKGROUND_REFRESH_SECONDS = int(os.environ.get("BACKGROUND_REFRESH_SECONDS", "600"))
 OFFLINE_FIXTURES_TTL_SECONDS = int(os.environ.get("OFFLINE_FIXTURES_TTL_SECONDS", "3600"))
 TEAM_SQUAD_TTL_SECONDS = int(os.environ.get("TEAM_SQUAD_TTL_SECONDS", "2592000"))
+TEAM_SQUAD_MAX_FETCH_PER_MONTH = int(os.environ.get("TEAM_SQUAD_MAX_FETCH_PER_MONTH", "30"))
 
 _RESPONSE_CACHE: dict[str, object] = {"html": "", "ts": 0.0}
 _RESPONSE_LOCK = threading.Lock()
@@ -300,6 +301,10 @@ def _load_team_squad_cache() -> None:
             data = json.loads(_TEAM_SQUAD_CACHE_FILE.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 _TEAM_SQUAD_CACHE = data
+            else:
+                _TEAM_SQUAD_CACHE = {}
+        else:
+            _TEAM_SQUAD_CACHE = {}
     except Exception:
         _TEAM_SQUAD_CACHE = {}
 
@@ -310,6 +315,34 @@ def _save_team_squad_cache() -> None:
         _TEAM_SQUAD_CACHE_FILE.write_text(json.dumps(_TEAM_SQUAD_CACHE, ensure_ascii=True), encoding="utf-8")
     except Exception:
         pass
+
+
+def _squad_fetch_allowed() -> bool:
+    _load_team_squad_cache()
+    meta = _TEAM_SQUAD_CACHE.get("_meta", {})
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    if not isinstance(meta, dict) or meta.get("month") != month:
+        _TEAM_SQUAD_CACHE["_meta"] = {"month": month, "count": 0}
+        _save_team_squad_cache()
+        return True
+    try:
+        count = int(meta.get("count", 0))
+    except Exception:
+        count = 0
+    return count < TEAM_SQUAD_MAX_FETCH_PER_MONTH
+
+
+def _note_squad_fetch() -> None:
+    meta = _TEAM_SQUAD_CACHE.get("_meta")
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    if not isinstance(meta, dict) or meta.get("month") != month:
+        meta = {"month": month, "count": 0}
+    try:
+        meta["count"] = int(meta.get("count", 0)) + 1
+    except Exception:
+        meta["count"] = 1
+    _TEAM_SQUAD_CACHE["_meta"] = meta
+    _save_team_squad_cache()
 RSS_SOURCES_FILE = os.path.join(os.path.dirname(__file__), "data", "rss_sources.json")
 RSS_EXTRA_SOURCES_FILE = os.path.join(os.path.dirname(__file__), "data", "rss_sources_extra.json")
 OFFLINE_FIXTURES_FILE = os.path.join(os.path.dirname(__file__), "data", "offline_fixtures.json")
@@ -3097,9 +3130,11 @@ def _team_squad_tokens(team_id: int | None) -> set[str]:
     if isinstance(cached, dict):
         ts = float(cached.get("ts", 0.0))
         if time.time() - ts < TEAM_SQUAD_TTL_SECONDS:
-            names = cached.get("names") or []
-            return {_normalize_team_name(str(name)) for name in names if name}
+            tokens = cached.get("tokens") or []
+            return {str(tok) for tok in tokens if tok}
     if _backoff_active("football-data"):
+        return set()
+    if not _squad_fetch_allowed():
         return set()
     try:
         response = _HTTP.get(
@@ -3114,14 +3149,16 @@ def _team_squad_tokens(team_id: int | None) -> set[str]:
             return set()
         data = response.json()
         squad = data.get("squad", []) if isinstance(data, dict) else []
-        names = []
+        tokens: set[str] = set()
         for player in squad:
             name = player.get("name") or player.get("shortName")
             if name:
-                names.append(str(name))
-        _TEAM_SQUAD_CACHE[key] = {"ts": time.time(), "names": names}
+                words = [w.lower() for w in re.split(r"\W+", str(name)) if len(w) > 2]
+                tokens.update(words)
+        _TEAM_SQUAD_CACHE[key] = {"ts": time.time(), "tokens": sorted(tokens)}
+        _note_squad_fetch()
         _save_team_squad_cache()
-        return {_normalize_team_name(str(name)) for name in names if name}
+        return tokens
     except Exception:
         return set()
 
