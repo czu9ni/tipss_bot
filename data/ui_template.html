@@ -155,6 +155,7 @@
     .crest{width:36px;height:36px;border-radius:14px;background: rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.12);display:grid;place-items:center;overflow:hidden;}
     .team .tname{font-weight:850; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
     .small{font-size:12px;color:var(--muted); margin-top:2px}
+    .detail-stats .small{font-size:16px}
     .numbers{display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:flex-end;}
     .chip{padding:7px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.12);background: rgba(255,255,255,.06);font-weight:850;font-size:12px;}
     .chip.odds{background: rgba(0,229,255,.12);border-color: rgba(0,229,255,.26);box-shadow: 0 0 22px rgba(0,229,255,.10);}
@@ -167,6 +168,7 @@
     .kpi{display:grid; gap:10px;}
     .kpi .k{padding:12px;border-radius:18px;background: rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.10);}
     .k .label{color:var(--muted);font-size:12px}
+    .detail-stats .k .label{font-size:16px}
     .k .val{font-weight:900;font-size:22px;margin-top:6px; letter-spacing:-.02em}
     .k .hint{color:rgba(255,255,255,.72); font-size:12px;margin-top:6px}
 
@@ -251,62 +253,26 @@
       <section class="card">
         <div class="card-head">
           <h2 class="card-title">API allapot</h2>
-          <span class="badge"><span class="dot good"></span> <strong>{{ 4 if odds_configured and football_configured else 3 }}/4</strong> online</span>
+          <span class="badge"><span class="dot good"></span> <strong>{{ api_status_online }}/{{ api_status_total }}</strong> online</span>
         </div>
         <div class="card-body">
           <div class="list">
+            {% for item in api_items %}
             <div class="row">
               <div class="left">
-                <div class="icon" aria-hidden="true">API</div>
+                <div class="icon" aria-hidden="true">{{ item.icon }}</div>
                 <div style="min-width:0">
-                  <div class="name">Odds API</div>
-                  <div class="meta">Odds feed - manualis frissites</div>
+                  <div class="name">{{ item.name }}</div>
+                  <div class="meta">{{ item.meta }}</div>
+                  <div class="meta">{{ item.quota_text }}</div>
                 </div>
               </div>
-              <div class="status {{ "ok" if odds_configured else "bad" }}">
-                <span class="dot {{ "good" if odds_configured else "bad" }}"></span>
-                {{ "Beallitva" if odds_configured else "Hianyzik" }}
+              <div class="status {{ item.status }}">
+                <span class="dot {{ "good" if item.status == "ok" else ("warn" if item.status == "warn" else "bad") }}"></span>
+                {{ item.label }}
               </div>
             </div>
-
-            <div class="row">
-              <div class="left">
-                <div class="icon" aria-hidden="true">FD</div>
-                <div style="min-width:0">
-                  <div class="name">Football Data</div>
-                  <div class="meta">Meccsek, tabella, eredmenyek</div>
-                </div>
-              </div>
-              <div class="status {{ "ok" if football_configured else "bad" }}">
-                <span class="dot {{ "good" if football_configured else "bad" }}"></span>
-                {{ "Beallitva" if football_configured else "Hianyzik" }}
-              </div>
-            </div>
-
-            <div class="row">
-              <div class="left">
-                <div class="icon" aria-hidden="true">WX</div>
-                <div style="min-width:0">
-                  <div class="name">Idojaras</div>
-                  <div class="meta">Open-Meteo - kulcs nelkul</div>
-                </div>
-              </div>
-              <div class="status ok"><span class="dot good"></span> OK</div>
-            </div>
-
-            <div class="row">
-              <div class="left">
-                <div class="icon" aria-hidden="true">NEWS</div>
-                <div style="min-width:0">
-                  <div class="name">Hirek</div>
-                  <div class="meta">RSS osszefoglalo - {{ rss_sources or "n/a" }}</div>
-                </div>
-              </div>
-              <div class="status {{ "ok" if rss_items else "warn" }}">
-                <span class="dot {{ "good" if rss_items else "warn" }}"></span>
-                {{ "OK" if rss_items else "Korlatozott" }}
-              </div>
-            </div>
+            {% endfor %}
           </div>
           {% if odds_error %}
           <p class="muted" style="margin-top:10px">Odds API hiba: {{ odds_error }}</p>
@@ -393,12 +359,7 @@
               <div style="color:rgba(255,255,255,.74); font-size:13px; line-height:1.45">
                 Indoklas: {{ best_pick.explain_hu if best_pick.explain_hu else ", ".join(_match_reasons(best_pick)) }}
               </div>
-              {% if best_pick.story %}
-              <div class="story-box">
-                <span class="story-title">Miről szól ez a mérkőzés?</span>
-                {{ best_pick.story }}
-              </div>
-              {% endif %}
+              
 
               <form method="post" action="/save_pick" class="inline">
                 <input type="hidden" name="sport_key" value="{{ best_pick.sport_key }}">
@@ -586,7 +547,7 @@
         </div>
       </section>
 
-      <section class="card span2">
+      <section class="card span2 detail-stats">
         <div class="card-head">
           <h2 class="card-title">Reszletes statisztika a kivalasztott meccshez</h2>
         </div>
@@ -600,6 +561,9 @@
             <div class="small">Indoklas: {{ pick.explain_hu if pick.explain_hu else ", ".join(_match_reasons(pick)) }}</div>
             <div class="small">Kockazat: {{ "zold" if pick.risk == "green" else ("sarga" if pick.risk == "yellow" else "piros") }}</div>
             <div class="small">Idojaras: esely max {{ wx.precip_prob_max if wx.precip_prob_max is not none else "n/a" }}%, csapadek max {{ wx.precip_max if wx.precip_max is not none else "n/a" }} mm, homerseklet min/max {{ wx.temp_min if wx.temp_min is not none else "n/a" }}/{{ wx.temp_max if wx.temp_max is not none else "n/a" }} C</div>
+            {% if pick.confidence %}
+            <div class="small">Biztonsag: {{ pick.confidence.level }}{% if pick.confidence.notes %} ({{ ", ".join(pick.confidence.notes) }}){% endif %}</div>
+            {% endif %}
             {% if pick.story %}
             <div class="story-box" style="margin-top:6px;">
               <span class="story-title">Miért ezt a meccset ajánlom?</span>
@@ -609,8 +573,8 @@
             <div class="tip-grid" style="margin-top:10px">
               <div class="k">
                 <div class="label">{{ pick.home_summary.team }} - utobbi 5 meccs</div>
-                <div class="small">Gyozelmi arany: {{ "%.0f"|format(pick.home_summary.win_rate * 100) }}%</div>
-                <div class="small">Rugott gol atlag: {{ "%.2f"|format(pick.home_summary.goals_for_avg) }}</div>
+                <div class="small">Gyozelmi arany: {{ "%.0f"|format(pick.home_summary.win_rate * 100) if pick.home_summary.win_rate is not none else "n/a" }}%</div>
+                <div class="small">Rugott gol atlag: {{ "%.2f"|format(pick.home_summary.goals_for_avg) if pick.home_summary.goals_for_avg is not none else "n/a" }}</div>
                 <div class="small">GG arany: {{ "%.0f"|format(pick.home_summary.btts_rate * 100) if pick.home_summary.btts_rate is not none else "n/a" }}%</div>
                 <div class="small">Over 2.5 arany: {{ "%.0f"|format(pick.home_summary.over25_rate * 100) if pick.home_summary.over25_rate is not none else "n/a" }}%</div>
                 <div class="small">Szogletek atlag: {{ "%.2f"|format(pick.home_summary.corners_avg) if pick.home_summary.corners_avg is not none else "n/a" }}</div>
@@ -634,8 +598,8 @@
               </div>
               <div class="k">
                 <div class="label">{{ pick.away_summary.team }} - utobbi 5 meccs</div>
-                <div class="small">Gyozelmi arany: {{ "%.0f"|format(pick.away_summary.win_rate * 100) }}%</div>
-                <div class="small">Rugott gol atlag: {{ "%.2f"|format(pick.away_summary.goals_for_avg) }}</div>
+                <div class="small">Gyozelmi arany: {{ "%.0f"|format(pick.away_summary.win_rate * 100) if pick.away_summary.win_rate is not none else "n/a" }}%</div>
+                <div class="small">Rugott gol atlag: {{ "%.2f"|format(pick.away_summary.goals_for_avg) if pick.away_summary.goals_for_avg is not none else "n/a" }}</div>
                 <div class="small">GG arany: {{ "%.0f"|format(pick.away_summary.btts_rate * 100) if pick.away_summary.btts_rate is not none else "n/a" }}%</div>
                 <div class="small">Over 2.5 arany: {{ "%.0f"|format(pick.away_summary.over25_rate * 100) if pick.away_summary.over25_rate is not none else "n/a" }}%</div>
                 <div class="small">Szogletek atlag: {{ "%.2f"|format(pick.away_summary.corners_avg) if pick.away_summary.corners_avg is not none else "n/a" }}</div>
@@ -664,8 +628,8 @@
           <div class="tip-grid">
             <div class="k">
               <div class="label">{{ best_pick.home_summary.team }} - utobbi 5 meccs</div>
-              <div class="small">Gyozelmi arany: {{ "%.0f"|format(best_pick.home_summary.win_rate * 100) }}%</div>
-              <div class="small">Rugott gol atlag: {{ "%.2f"|format(best_pick.home_summary.goals_for_avg) }}</div>
+              <div class="small">Gyozelmi arany: {{ "%.0f"|format(best_pick.home_summary.win_rate * 100) if best_pick.home_summary.win_rate is not none else "n/a" }}%</div>
+              <div class="small">Rugott gol atlag: {{ "%.2f"|format(best_pick.home_summary.goals_for_avg) if best_pick.home_summary.goals_for_avg is not none else "n/a" }}</div>
               <div class="small">GG arany: {{ "%.0f"|format(best_pick.home_summary.btts_rate * 100) if best_pick.home_summary.btts_rate is not none else "n/a" }}%</div>
               <div class="small">Over 2.5 arany: {{ "%.0f"|format(best_pick.home_summary.over25_rate * 100) if best_pick.home_summary.over25_rate is not none else "n/a" }}%</div>
               <div class="small">Szogletek atlag: {{ "%.2f"|format(best_pick.home_summary.corners_avg) if best_pick.home_summary.corners_avg is not none else "n/a" }}</div>
@@ -689,8 +653,8 @@
             </div>
             <div class="k">
               <div class="label">{{ best_pick.away_summary.team }} - utobbi 5 meccs</div>
-              <div class="small">Gyozelmi arany: {{ "%.0f"|format(best_pick.away_summary.win_rate * 100) }}%</div>
-              <div class="small">Rugott gol atlag: {{ "%.2f"|format(best_pick.away_summary.goals_for_avg) }}</div>
+              <div class="small">Gyozelmi arany: {{ "%.0f"|format(best_pick.away_summary.win_rate * 100) if best_pick.away_summary.win_rate is not none else "n/a" }}%</div>
+              <div class="small">Rugott gol atlag: {{ "%.2f"|format(best_pick.away_summary.goals_for_avg) if best_pick.away_summary.goals_for_avg is not none else "n/a" }}</div>
               <div class="small">GG arany: {{ "%.0f"|format(best_pick.away_summary.btts_rate * 100) if best_pick.away_summary.btts_rate is not none else "n/a" }}%</div>
               <div class="small">Over 2.5 arany: {{ "%.0f"|format(best_pick.away_summary.over25_rate * 100) if best_pick.away_summary.over25_rate is not none else "n/a" }}%</div>
               <div class="small">Szogletek atlag: {{ "%.2f"|format(best_pick.away_summary.corners_avg) if best_pick.away_summary.corners_avg is not none else "n/a" }}</div>
@@ -843,6 +807,36 @@
           <span class="badge">Mentesek: <strong>{{ saved_picks|length }}</strong></span>
         </div>
         <div class="card-body">
+          {% if saved_summary %}
+          <div class="muted" style="margin-bottom:10px">
+            ROI: <strong>{{ '%.2f'|format(saved_summary.roi * 100) }}%</strong>, profit: <strong>{{ '%.2f'|format(saved_summary.profit) }}</strong>, nyert: {{ saved_summary.wins }}, vesztett: {{ saved_summary.losses }}, visszajaro: {{ saved_summary.pushes }}
+          </div>
+          {% endif %}
+          {% if saved_summary_15d %}
+          <div class="muted" style="margin-bottom:10px">
+            15 nap: ROI <strong>{{ '%.2f'|format(saved_summary_15d.roi * 100) }}%</strong>, profit <strong>{{ '%.2f'|format(saved_summary_15d.profit) }}</strong>
+          </div>
+          {% endif %}
+          {% if saved_summary_30d %}
+          <div class="muted" style="margin-bottom:10px">
+            30 nap: ROI <strong>{{ '%.2f'|format(saved_summary_30d.roi * 100) }}%</strong>, profit <strong>{{ '%.2f'|format(saved_summary_30d.profit) }}</strong>
+          </div>
+          {% endif %}
+          {% if saved_summary_60d %}
+          <div class="muted" style="margin-bottom:10px">
+            60 nap: ROI <strong>{{ '%.2f'|format(saved_summary_60d.roi * 100) }}%</strong>, profit <strong>{{ '%.2f'|format(saved_summary_60d.profit) }}</strong>
+          </div>
+          {% endif %}
+          {% if saved_summary_90d %}
+          <div class="muted" style="margin-bottom:10px">
+            90 nap: ROI <strong>{{ '%.2f'|format(saved_summary_90d.roi * 100) }}%</strong>, profit <strong>{{ '%.2f'|format(saved_summary_90d.profit) }}</strong>
+          </div>
+          {% endif %}
+          {% if saved_summary_180d %}
+          <div class="muted" style="margin-bottom:10px">
+            180 nap: ROI <strong>{{ '%.2f'|format(saved_summary_180d.roi * 100) }}%</strong>, profit <strong>{{ '%.2f'|format(saved_summary_180d.profit) }}</strong>
+          </div>
+          {% endif %}
           {% if saved_picks %}
           <table>
             <thead>
