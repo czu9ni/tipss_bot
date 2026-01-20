@@ -91,6 +91,7 @@ TRANSLATE_SOURCE = os.environ.get("TRANSLATE_SOURCE", "auto").strip()
 TRANSLATE_TARGET = os.environ.get("TRANSLATE_TARGET", "hu").strip()
 TRANSLATE_TIMEOUT_SECONDS = float(os.environ.get("TRANSLATE_TIMEOUT_SECONDS", "4"))
 AF_STATS_ENABLED = os.environ.get("AF_STATS_ENABLED", "1") == "1"
+STAT_ONLY_DC_CAP = float(os.environ.get("STAT_ONLY_DC_CAP", "0.80"))
 RISK_EXCLUDE_CUP = os.environ.get("RISK_EXCLUDE_CUP", "1") == "1"
 RISK_EXCLUDE_DERBY = os.environ.get("RISK_EXCLUDE_DERBY", "1") == "1"
 RISK_EXCLUDE_ROTATION = os.environ.get("RISK_EXCLUDE_ROTATION", "1") == "1"
@@ -138,6 +139,7 @@ API_LIMITS = {
     "odds": int(os.environ.get("ODDS_API_MONTHLY_LIMIT", "0") or "0") or None,
     "football_data": int(os.environ.get("FOOTBALL_DATA_MONTHLY_LIMIT", "0") or "0") or None,
     "api_football": int(os.environ.get("API_FOOTBALL_MONTHLY_LIMIT", "0") or "0") or None,
+    "sportradar": int(os.environ.get("SPORTRADAR_MONTHLY_LIMIT", "0") or "0") or None,
     "open_meteo": int(os.environ.get("OPEN_METEO_MONTHLY_LIMIT", "0") or "0") or None,
     "rss": int(os.environ.get("RSS_MONTHLY_LIMIT", "0") or "0") or None,
     "translate": int(os.environ.get("TRANSLATE_MONTHLY_LIMIT", "0") or "0") or None,
@@ -147,6 +149,10 @@ API_LIMITS = {
 
 def _api_month_key() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m")
+
+
+def _api_day_key() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
 def _load_api_usage() -> dict:
@@ -162,6 +168,12 @@ def _load_api_usage() -> dict:
         data = {}
     if not isinstance(data, dict):
         data = {}
+    if "months" not in data:
+        months = {k: v for k, v in data.items() if isinstance(k, str) and re.match(r"\d{4}-\d{2}$", k)}
+        days = data.get("days", {}) if isinstance(data.get("days", {}), dict) else {}
+        data = {"months": months, "days": days}
+    if "days" not in data or not isinstance(data.get("days"), dict):
+        data["days"] = {}
     _API_USAGE = data
     return data
 
@@ -179,9 +191,12 @@ def _note_api_call(api_name: str, count: int = 1) -> None:
     if not api_name:
         return
     month_key = _api_month_key()
+    day_key = _api_day_key()
     with _API_USAGE_LOCK:
         data = _load_api_usage()
-        month = data.get(month_key)
+        months = data.get("months", {})
+        days = data.get("days", {})
+        month = months.get(month_key)
         if not isinstance(month, dict):
             month = {}
         usage = month.get(api_name)
@@ -189,29 +204,71 @@ def _note_api_call(api_name: str, count: int = 1) -> None:
             usage = {"count": 0}
         usage["count"] = int(usage.get("count", 0) or 0) + int(count)
         month[api_name] = usage
-        data[month_key] = month
+        months[month_key] = month
+        day = days.get(day_key)
+        if not isinstance(day, dict):
+            day = {}
+        daily = day.get(api_name)
+        if not isinstance(daily, dict):
+            daily = {"count": 0}
+        daily["count"] = int(daily.get("count", 0) or 0) + int(count)
+        day[api_name] = daily
+        days[day_key] = day
+        data["months"] = months
+        data["days"] = days
         _save_api_usage(data)
 
 
 def _api_quota_snapshot() -> dict[str, dict]:
     month_key = _api_month_key()
+    day_key = _api_day_key()
     data = _load_api_usage()
-    month = data.get(month_key, {}) if isinstance(data, dict) else {}
+    months = data.get("months", {}) if isinstance(data, dict) else {}
+    days = data.get("days", {}) if isinstance(data, dict) else {}
+    month = months.get(month_key, {}) if isinstance(months, dict) else {}
+    day = days.get(day_key, {}) if isinstance(days, dict) else {}
     snapshot = {}
     for key, limit in API_LIMITS.items():
         used = 0
+        used_today = 0
         if isinstance(month, dict):
             entry = month.get(key)
             if isinstance(entry, dict):
                 used = int(entry.get("count", 0) or 0)
+        if isinstance(day, dict):
+            entry = day.get(key)
+            if isinstance(entry, dict):
+                used_today = int(entry.get("count", 0) or 0)
         remaining = None if limit is None else max(limit - used, 0)
         snapshot[key] = {
             "used": used,
+            "used_today": used_today,
             "limit": limit,
             "remaining": remaining,
             "header": _API_HEADERS.get(key, {}),
         }
     return snapshot
+
+
+def _api_usage_counts() -> tuple[dict[str, int], dict[str, int]]:
+    month_key = _api_month_key()
+    day_key = _api_day_key()
+    data = _load_api_usage()
+    months = data.get("months", {}) if isinstance(data, dict) else {}
+    days = data.get("days", {}) if isinstance(data, dict) else {}
+    month = months.get(month_key, {}) if isinstance(months, dict) else {}
+    day = days.get(day_key, {}) if isinstance(days, dict) else {}
+    month_counts = {}
+    day_counts = {}
+    if isinstance(month, dict):
+        for key, entry in month.items():
+            if isinstance(entry, dict):
+                month_counts[key] = int(entry.get("count", 0) or 0)
+    if isinstance(day, dict):
+        for key, entry in day.items():
+            if isinstance(entry, dict):
+                day_counts[key] = int(entry.get("count", 0) or 0)
+    return month_counts, day_counts
 
 
 def _api_name_from_url(url: str) -> str | None:
@@ -222,6 +279,8 @@ def _api_name_from_url(url: str) -> str | None:
         return "api_football"
     if "api.the-odds-api.com" in url:
         return "odds"
+    if "api.sportradar" in url:
+        return "sportradar"
     if "api.open-meteo.com" in url or "geocoding-api.open-meteo.com" in url:
         return "open_meteo"
     if "translate.googleapis.com" in url:
@@ -270,6 +329,10 @@ def _update_api_headers(api_name: str, headers: dict) -> None:
     elif api_name == "api_football":
         remaining = _parse_int_header(lower, "x-ratelimit-requests-remaining", "x-ratelimit-remaining")
         limit = _parse_int_header(lower, "x-ratelimit-requests-limit", "x-ratelimit-limit")
+        info.update({"remaining": remaining, "limit": limit, "window": "keret"})
+    elif api_name == "sportradar":
+        remaining = _parse_int_header(lower, "x-ratelimit-remaining", "x-ratelimit-requests-remaining")
+        limit = _parse_int_header(lower, "x-ratelimit-limit", "x-ratelimit-requests-limit")
         info.update({"remaining": remaining, "limit": limit, "window": "keret"})
     else:
         return
@@ -378,6 +441,7 @@ FD_RECENT_TTL_SECONDS = int(os.environ.get("FD_RECENT_TTL_SECONDS", "600"))
 FD_STANDINGS_TTL_SECONDS = int(os.environ.get("FD_STANDINGS_TTL_SECONDS", "1800"))
 FD_FIXTURES_TTL_SECONDS = int(os.environ.get("FD_FIXTURES_TTL_SECONDS", "120"))
 AF_FIXTURES_TTL_SECONDS = int(os.environ.get("AF_FIXTURES_TTL_SECONDS", "120"))
+SR_FIXTURES_TTL_SECONDS = int(os.environ.get("SR_FIXTURES_TTL_SECONDS", "300"))
 AF_STATS_TTL_SECONDS = int(os.environ.get("AF_STATS_TTL_SECONDS", "21600"))
 ODDS_CACHE_TTL_SECONDS = int(os.environ.get("ODDS_CACHE_TTL_SECONDS", "90"))
 REFRESH_COOLDOWN_SECONDS = int(os.environ.get("REFRESH_COOLDOWN_SECONDS", "30"))
@@ -395,6 +459,7 @@ _FD_STANDINGS_CACHE: dict[str, dict[str, object]] = {}
 _FD_FIXTURES_CACHE: dict[str, dict[str, object]] = {}
 _FDCO_TABLE_CACHE: dict[str, dict[str, object]] = {}
 _AF_FIXTURES_CACHE: dict[str, dict[str, object]] = {}
+_SR_FIXTURES_CACHE: dict[str, dict[str, object]] = {}
 _ODDS_CACHE: dict[str, object] = {"ts": 0.0, "matches": [], "error": None}
 _TEAM_PPG_CACHE: dict[int, dict[str, object]] = {}
 _TEAM_SUMMARY_CACHE: dict[str, dict[str, object]] = {}
@@ -1220,24 +1285,37 @@ def _is_youth_comp(name: str) -> bool:
     return any(token in text for token in ("u20", "u21", "u23", "youth", "primavera", "reserve"))
 
 
-def _default_allowed_comp_names() -> set[str]:
-    names = [
-        "uefa champions league",
-        "champions league",
-        "uefa europa league",
-        "europa league",
-        "uefa europa conference league",
-        "premier league",
-        "championship",
-        "serie a",
-        "bundesliga",
-        "ligue 1",
-        "eredivisie",
-        "primeira liga",
-        "primera division",
-        "la liga",
+def _default_allowed_comp_rules() -> list[tuple[str, str | None]]:
+    return [
+        ("uefa champions league", None),
+        ("uefa europa league", None),
+        ("uefa europa conference league", None),
+        ("premier league", "england"),
+        ("championship", "england"),
+        ("serie a", "italy"),
+        ("bundesliga", "germany"),
+        ("ligue 1", "france"),
+        ("eredivisie", "netherlands"),
+        ("primeira liga", "portugal"),
+        ("primera division", "spain"),
+        ("la liga", "spain"),
     ]
-    return {_normalize_comp(name) for name in names}
+
+
+def _allowed_comp_match(comp_name: str, comp_country: str) -> bool:
+    if not comp_name:
+        return False
+    name_norm = _normalize_comp(comp_name)
+    country_norm = _normalize_comp(comp_country or "")
+    for name_rule, country_rule in _default_allowed_comp_rules():
+        if _normalize_comp(name_rule) not in name_norm:
+            continue
+        if country_rule:
+            if country_norm == _normalize_comp(country_rule):
+                return True
+            continue
+        return True
+    return False
 
 
 def _fd_competition_map(competitions: list[dict]) -> dict[tuple[str, str], str]:
@@ -3203,15 +3281,18 @@ def _diagnostics_fixtures(token: str, competitions: list[dict], hours: int = 24)
     comps_count = len(all_fixtures)
     all_count = len(all_fixtures)
     api_football_count = len(_fetch_upcoming_fixtures_api_football(config.api_football_key, hours))
+    sportradar_count = len(_fetch_upcoming_fixtures_sportradar(config.sportradar_api_key, hours))
     _, date_from, date_to = _fixture_window(hours)
     return {
         "comp_24": comps_count,
         "all_24": all_count,
         "api_football_24": api_football_count,
+        "sportradar_24": sportradar_count,
         "window_from": date_from,
         "window_to": date_to,
         "window_source": _LAST_WINDOW_INFO.get("source", "system"),
         "api_football_enabled": bool(config.api_football_key),
+        "sportradar_enabled": bool(config.sportradar_api_key),
     }
 
 
@@ -3327,6 +3408,103 @@ def _fetch_upcoming_fixtures_api_football(api_key: str, hours: int = 24, limit: 
             )
         fixtures = fixtures[:limit]
         _cache_set(_AF_FIXTURES_CACHE, cache_key, fixtures)
+        return fixtures
+    except Exception:
+        return []
+
+
+def _parse_sportradar_event(item: dict) -> dict | None:
+    event = item.get("sport_event") if isinstance(item.get("sport_event"), dict) else item
+    if not isinstance(event, dict):
+        return None
+    start_time = event.get("start_time") or event.get("scheduled") or event.get("start_time_utc")
+    if not start_time:
+        return None
+    tournament = event.get("tournament") or {}
+    category = tournament.get("category") if isinstance(tournament, dict) else {}
+    competitors = event.get("competitors") or []
+    home_name = None
+    away_name = None
+    home_id = None
+    away_id = None
+    if isinstance(competitors, list):
+        for comp in competitors:
+            if not isinstance(comp, dict):
+                continue
+            qualifier = str(comp.get("qualifier") or "").lower()
+            name = comp.get("name")
+            if qualifier == "home":
+                home_name = name
+                home_id = comp.get("id")
+            elif qualifier == "away":
+                away_name = name
+                away_id = comp.get("id")
+    if not home_name or not away_name:
+        return None
+    comp_name = ""
+    comp_country = ""
+    if isinstance(tournament, dict):
+        comp_name = str(tournament.get("name") or "")
+        if isinstance(category, dict):
+            comp_country = str(category.get("name") or "")
+    return {
+        "id": event.get("id"),
+        "sport_key": str(tournament.get("id") or comp_name),
+        "comp_code": str(tournament.get("id") or ""),
+        "comp_name": comp_name,
+        "comp_country": comp_country,
+        "season": tournament.get("season", {}).get("name") if isinstance(tournament, dict) else None,
+        "commence_time": str(start_time),
+        "home_team": home_name,
+        "away_team": away_name,
+        "home_id": home_id,
+        "away_id": away_id,
+    }
+
+
+def _fetch_upcoming_fixtures_sportradar(api_key: str, hours: int = 24, limit: int = 40) -> list[dict]:
+    base_url = (config.sportradar_api_base or "https://api.sportradar.com/soccer/trial/v4/en").rstrip("/")
+    if not api_key or not base_url:
+        return []
+    if _backoff_active("sportradar"):
+        return []
+    cache_key = f"{hours}:{limit}"
+    cached = _cache_get(_SR_FIXTURES_CACHE, cache_key, SR_FIXTURES_TTL_SECONDS)
+    if isinstance(cached, list):
+        return cached
+    try:
+        now, date_from, date_to = _fixture_window(hours)
+        fixtures: list[dict] = []
+
+        def _fetch(date_value: str) -> list[dict]:
+            url = f"{base_url}/schedules/{date_value}/schedule.json"
+            response = _http_get(url, params={"api_key": api_key}, timeout=12)
+            if response.status_code != 200:
+                if response.status_code == 429:
+                    _note_backoff("sportradar")
+                return []
+            payload = response.json()
+            events = payload.get("sport_events") or payload.get("sport_events", [])
+            if not isinstance(events, list):
+                return []
+            return events
+
+        events = _fetch(date_from)
+        if date_to != date_from:
+            events.extend(_fetch(date_to))
+        for item in events:
+            parsed = _parse_sportradar_event(item)
+            if not parsed:
+                continue
+            commence = _parse_match_dt(parsed)
+            if not commence:
+                continue
+            delta = commence - now
+            if delta.total_seconds() < 0 or delta.total_seconds() > hours * 3600:
+                continue
+            fixtures.append(parsed)
+        fixtures = fixtures[:limit]
+        _cache_set(_SR_FIXTURES_CACHE, cache_key, fixtures)
         return fixtures
     except Exception:
         return []
@@ -4133,14 +4311,15 @@ def _stat_pick_for_match(
         {"label": "12 (Valaki nyer)", "prob": p_home + p_away},
     ]
     best_dc = max(dc_candidates, key=lambda item: item["prob"])
-    candidates.append(
-        {
-            "label": best_dc["label"],
-            "prob": best_dc["prob"],
-            "market_key": "double_chance",
-            "market_label": "Dupla esely (odds nelkul)",
-        }
-    )
+    if not (best_dc["label"].startswith("12") and best_dc["prob"] >= STAT_ONLY_DC_CAP):
+        candidates.append(
+            {
+                "label": best_dc["label"],
+                "prob": best_dc["prob"],
+                "market_key": "double_chance",
+                "market_label": "Dupla esely (odds nelkul)",
+            }
+        )
     best = max(candidates, key=lambda item: item["prob"])
     selection_label = best["label"]
     model_prob = best["prob"]
@@ -4350,6 +4529,7 @@ def _fetch_public_fixtures(
             allowed_pairs.add((_normalize_comp(name), _normalize_comp(area)))
     fixtures.extend(_fetch_upcoming_fixtures_fd_all(config.football_data_token, window_hours))
     fixtures.extend(_fetch_upcoming_fixtures_api_football(config.api_football_key, window_hours))
+    fixtures.extend(_fetch_upcoming_fixtures_sportradar(config.sportradar_api_key, window_hours))
     fixtures = _dedupe_fixtures(fixtures)
     now = datetime.now(BUDAPEST_TZ)
     fixtures = [
@@ -4374,20 +4554,28 @@ def _fetch_public_fixtures(
                     item["fd_code"] = fd_code
                     filtered.append(item)
                     continue
-            # If we cannot match the competition to known list, skip.
-        fixtures = filtered
-    else:
-        allowed_names = _default_allowed_comp_names()
-        if allowed_names:
+            if comp_name and not _is_youth_comp(comp_name) and _allowed_comp_match(comp_name, comp_country):
+                filtered.append(item)
+        if not filtered:
             filtered = []
             for item in fixtures:
                 comp_name = str(item.get("comp_name") or item.get("competition") or "")
+                comp_country = str(item.get("comp_country") or "")
                 if not comp_name or _is_youth_comp(comp_name):
                     continue
-                comp_norm = _normalize_comp(comp_name)
-                if any(name in comp_norm for name in allowed_names):
+                if _allowed_comp_match(comp_name, comp_country):
                     filtered.append(item)
-            fixtures = filtered
+        fixtures = filtered
+    else:
+        filtered = []
+        for item in fixtures:
+            comp_name = str(item.get("comp_name") or item.get("competition") or "")
+            comp_country = str(item.get("comp_country") or "")
+            if not comp_name or _is_youth_comp(comp_name):
+                continue
+            if _allowed_comp_match(comp_name, comp_country):
+                filtered.append(item)
+        fixtures = filtered
     if allowed_codes:
         comp_codes: list[str] = []
         for item in fixtures:
@@ -5028,6 +5216,7 @@ def _persist_pick_snapshot(
     odds_count: int,
     odds_error: str | None,
     rss_items: list[dict],
+    refresh_usage: dict[str, int] | None,
 ) -> tuple[dict, list[dict]]:
     best_pick, target_matches = _enforce_tip_presence(best_pick, target_matches)
     _store_cached_picks(
@@ -5040,6 +5229,7 @@ def _persist_pick_snapshot(
             "odds_count": odds_count,
             "odds_error": odds_error,
             "rss_sources": ", ".join(sorted({item.get("source", "") for item in rss_items if item.get("source")})),
+            "refresh_usage": refresh_usage or {},
         },
     )
     return best_pick, target_matches
@@ -5264,10 +5454,12 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
     odds_error = None
     best_pick = None
     best_combo = None
+    refresh_usage: dict[str, int] = {}
     diag_counts = {"comp_24": 0, "all_24": 0, "api_football_24": 0, "window_from": "", "window_to": "", "window_source": "system"}
 
     if refresh_requested:
         cached_updated_at = None
+        pre_month, _ = _api_usage_counts()
         try:
             diag_counts = _diagnostics_fixtures(config.football_data_token, competitions, window_hours)
             if not config.odds_api_key:
@@ -5275,67 +5467,23 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                 data = []
                 eligible = []
                 fixtures, standings_by_comp = _fetch_public_fixtures(competitions, window_hours)
-                rss_team_names = []
-                for item in fixtures:
-                    home = item.get("home_team")
-                    away = item.get("away_team")
-                    if home:
-                        rss_team_names.append(str(home))
-                    if away:
-                        rss_team_names.append(str(away))
-                rss_items = _fetch_rss_items(rss_team_names)
+                if fixtures:
+                    rss_team_names = []
+                    for item in fixtures:
+                        home = item.get("home_team")
+                        away = item.get("away_team")
+                        if home:
+                            rss_team_names.append(str(home))
+                        if away:
+                            rss_team_names.append(str(away))
+                    rss_items = _fetch_rss_items(rss_team_names)
+                else:
+                    rss_items = []
                 picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items, market_roi)
                 if not picks:
                     fallback_hours = 24
                     fixtures, standings_by_comp = _fetch_public_fixtures(competitions, fallback_hours)
-                    rss_team_names = []
-                    for item in fixtures:
-                        home = item.get("home_team")
-                        away = item.get("away_team")
-                        if home:
-                            rss_team_names.append(str(home))
-                        if away:
-                            rss_team_names.append(str(away))
-                    rss_items = _fetch_rss_items(rss_team_names)
-                    picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items, market_roi)
-                    if picks:
-                        odds_error = "Odds API kulcs hianyzik (odds nelkuli ajanlas, 24 oras ablak)"
-                if not picks:
-                    odds_error = "Nincs elerheto meccs 24 oras ablakban"
-                odds_count = len(picks)
-                best_pick, target_matches = _select_stat_picks(picks, limit=2)
-                best_combo = None
-                best_pick, target_matches = _persist_pick_snapshot(
-                    db,
-                    odds_data,
-                    best_pick,
-                    best_combo,
-                    target_matches,
-                    odds_count,
-                    odds_error,
-                    rss_items,
-                )
-            else:
-                data, odds_error = _fetch_odds_matches(config.odds_api_key)
-                eligible = []
-                use_odds = bool(data) and not odds_error
-                if not use_odds:
-                    if not odds_error:
-                        odds_error = "Odds API adat nem elerheto (odds nelkuli ajanlas)"
-                    fixtures, standings_by_comp = _fetch_public_fixtures(competitions, window_hours)
-                    rss_team_names = []
-                    for item in fixtures:
-                        home = item.get("home_team")
-                        away = item.get("away_team")
-                        if home:
-                            rss_team_names.append(str(home))
-                        if away:
-                            rss_team_names.append(str(away))
-                    rss_items = _fetch_rss_items(rss_team_names)
-                    picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items, market_roi)
-                    if not picks:
-                        fallback_hours = 24
-                        fixtures, standings_by_comp = _fetch_public_fixtures(competitions, fallback_hours)
+                    if fixtures:
                         rss_team_names = []
                         for item in fixtures:
                             home = item.get("home_team")
@@ -5345,6 +5493,68 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                             if away:
                                 rss_team_names.append(str(away))
                         rss_items = _fetch_rss_items(rss_team_names)
+                    else:
+                        rss_items = []
+                    picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items, market_roi)
+                    if picks:
+                        odds_error = "Odds API kulcs hianyzik (odds nelkuli ajanlas, 24 oras ablak)"
+                if not picks:
+                    odds_error = "Nincs elerheto meccs 24 oras ablakban"
+                odds_count = len(picks)
+                best_pick, target_matches = _select_stat_picks(picks, limit=2)
+                best_combo = None
+                post_month, _ = _api_usage_counts()
+                refresh_usage = {
+                    key: max(0, post_month.get(key, 0) - pre_month.get(key, 0))
+                    for key in set(pre_month) | set(post_month)
+                }
+                best_pick, target_matches = _persist_pick_snapshot(
+                    db,
+                    odds_data,
+                    best_pick,
+                    best_combo,
+                    target_matches,
+                    odds_count,
+                    odds_error,
+                    rss_items,
+                    refresh_usage,
+                )
+            else:
+                data, odds_error = _fetch_odds_matches(config.odds_api_key)
+                eligible = []
+                use_odds = bool(data) and not odds_error
+                if not use_odds:
+                    if not odds_error:
+                        odds_error = "Odds API adat nem elerheto (odds nelkuli ajanlas)"
+                    fixtures, standings_by_comp = _fetch_public_fixtures(competitions, window_hours)
+                    if fixtures:
+                        rss_team_names = []
+                        for item in fixtures:
+                            home = item.get("home_team")
+                            away = item.get("away_team")
+                            if home:
+                                rss_team_names.append(str(home))
+                            if away:
+                                rss_team_names.append(str(away))
+                        rss_items = _fetch_rss_items(rss_team_names)
+                    else:
+                        rss_items = []
+                    picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items, market_roi)
+                    if not picks:
+                        fallback_hours = 24
+                        fixtures, standings_by_comp = _fetch_public_fixtures(competitions, fallback_hours)
+                        if fixtures:
+                            rss_team_names = []
+                            for item in fixtures:
+                                home = item.get("home_team")
+                                away = item.get("away_team")
+                                if home:
+                                    rss_team_names.append(str(home))
+                                if away:
+                                    rss_team_names.append(str(away))
+                            rss_items = _fetch_rss_items(rss_team_names)
+                        else:
+                            rss_items = []
                         picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items, market_roi)
                         if picks:
                             odds_error = "Odds API adat nem elerheto (24 oras ablak)"
@@ -5353,6 +5563,11 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                     odds_count = len(picks)
                     best_pick, target_matches = _select_stat_picks(picks, limit=2)
                     best_combo = None
+                    post_month, _ = _api_usage_counts()
+                    refresh_usage = {
+                        key: max(0, post_month.get(key, 0) - pre_month.get(key, 0))
+                        for key in set(pre_month) | set(post_month)
+                    }
                     best_pick, target_matches = _persist_pick_snapshot(
                         db,
                         odds_data,
@@ -5362,6 +5577,7 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                         odds_count,
                         odds_error,
                         rss_items,
+                        refresh_usage,
                     )
                 if use_odds and data:
                     eligible_fallback: list[dict] = []
@@ -5385,15 +5601,18 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                         eligible = eligible_fallback[:]
             if eligible:
                 odds_count = len(eligible)
-                rss_team_names = []
-                for item in eligible:
-                    home = item.get("home_team")
-                    away = item.get("away_team")
-                    if home:
-                        rss_team_names.append(str(home))
-                    if away:
-                        rss_team_names.append(str(away))
-                rss_items = _fetch_rss_items(rss_team_names)
+                if eligible:
+                    rss_team_names = []
+                    for item in eligible:
+                        home = item.get("home_team")
+                        away = item.get("away_team")
+                        if home:
+                            rss_team_names.append(str(home))
+                        if away:
+                            rss_team_names.append(str(away))
+                    rss_items = _fetch_rss_items(rss_team_names)
+                else:
+                    rss_items = []
                 picks: list[dict] = []
                 filtered_picks: list[dict] = []
                 for match in eligible:
@@ -5475,6 +5694,11 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                     target_matches = [_enrich_pick(item) for item in target_matches]
                 if best_combo and best_combo.get("matches"):
                     best_combo["matches"] = [_enrich_pick(item) for item in best_combo["matches"]]
+            post_month, _ = _api_usage_counts()
+            refresh_usage = {
+                key: max(0, post_month.get(key, 0) - pre_month.get(key, 0))
+                for key in set(pre_month) | set(post_month)
+            }
             _store_cached_picks(
                 db,
                 {
@@ -5485,6 +5709,7 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                     "odds_count": odds_count,
                     "odds_error": odds_error,
                     "rss_sources": ", ".join(sorted({item.get("source", "") for item in rss_items if item.get("source")})),
+                    "refresh_usage": refresh_usage,
                 },
             )
         except Exception:
@@ -5500,6 +5725,7 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
             odds_count = cached.get("odds_count", 0)
             odds_error = cached.get("odds_error")
             cached_updated_at = cached.get("updated_at")
+            refresh_usage = cached.get("refresh_usage", {}) if cached else {}
             best_pick, target_matches = _enforce_tip_presence(cached.get("best_pick"), raw_target_matches)
             best_pick = _enrich_pick(best_pick) if best_pick else None
             target_matches = [_enrich_pick(item) for item in target_matches] if target_matches else []
@@ -5545,6 +5771,15 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
             "configured": bool(config.api_football_key),
             "status": "ok" if config.api_football_key else "bad",
             "label": "Beallitva" if config.api_football_key else "Hianyzik",
+        },
+        {
+            "key": "sportradar",
+            "icon": "SR",
+            "name": "Sportradar",
+            "meta": "Meccslista (fallback)",
+            "configured": bool(config.sportradar_api_key),
+            "status": "ok" if config.sportradar_api_key else "bad",
+            "label": "Beallitva" if config.sportradar_api_key else "Hianyzik",
         },
         {
             "key": "open_meteo",
@@ -5593,11 +5828,16 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
         remaining = h_remaining if h_remaining is not None else quota.get("remaining")
         limit = h_limit if h_limit is not None else quota.get("limit")
         used = h_used if h_used is not None else quota.get("used", 0)
+        used_today = int(quota.get("used_today", 0) or 0)
+        refresh_used = int(refresh_usage.get(item["key"], 0) or 0)
         limit_text = str(limit) if limit is not None else "n/a"
         remaining_text = str(remaining) if remaining is not None else "n/a"
         if window and remaining is not None:
             remaining_text = f"{remaining_text} ({window})"
-        item["quota_text"] = f"Limit: {limit_text}, maradek: {remaining_text}, felhasznalt: {used}"
+        item["quota_text"] = (
+            f"Limit: {limit_text}, maradek: {remaining_text}, felhasznalt: {used}, "
+            f"ma: {used_today}, frissites: +{refresh_used}"
+        )
     api_total = len(api_items)
     api_online = sum(1 for item in api_items if item.get("status") in {"ok"})
     context = {
