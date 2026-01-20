@@ -2124,6 +2124,13 @@ def _select_stat_picks(picks: list[dict], limit: int = 2) -> tuple[dict | None, 
     remaining = [item for item in enriched if item not in complete]
     remaining = _filter_picks_by_risk(remaining)
     selected = (complete + remaining)[:limit]
+    if not complete:
+        for item in selected:
+            item["notice"] = "NINCS ELEG STAT, AZ AJANLAS KORLATOZOTT"
+    else:
+        for item in selected:
+            if not _is_pick_complete(item):
+                item["notice"] = "RESZLEGES ADATOK MIATT KORLATOZOTT"
     best_pick = max(selected, key=lambda item: item.get("score", 0.0)) if selected else enriched[0]
     return best_pick, selected
 
@@ -2762,7 +2769,9 @@ def _score_pick(
             table_strength = ((-table_diff) + 1.0) / 2.0
             injury_index = injury_away
         elif lowered in {"12", "1-2", "home or away"} or (home_team.lower() in lowered and away_team.lower() in lowered):
-            return None
+            model_prob = p_home + p_away
+            selection_label = "12 (Valaki nyer)"
+            table_strength = 0.5
         else:
             return None
         form_strength = model_prob
@@ -4121,6 +4130,7 @@ def _stat_pick_for_match(
     dc_candidates = [
         {"label": "1X (Hazai vagy dontetlen)", "prob": p_home + p_draw},
         {"label": "X2 (Vendeg vagy dontetlen)", "prob": p_away + p_draw},
+        {"label": "12 (Valaki nyer)", "prob": p_home + p_away},
     ]
     best_dc = max(dc_candidates, key=lambda item: item["prob"])
     candidates.append(

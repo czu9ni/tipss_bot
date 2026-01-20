@@ -169,6 +169,7 @@
     .kpi .k{padding:12px;border-radius:18px;background: rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.10);}
     .k .label{color:var(--muted);font-size:12px}
     .detail-stats .k .label{font-size:16px}
+    .notice{font-size:16px;font-weight:900;color:var(--warn);text-transform:uppercase}
     .k .val{font-weight:900;font-size:22px;margin-top:6px; letter-spacing:-.02em}
     .k .hint{color:rgba(255,255,255,.72); font-size:12px;margin-top:6px}
 
@@ -563,6 +564,9 @@
             <div class="small">Idojaras: esely max {{ wx.precip_prob_max if wx.precip_prob_max is not none else "n/a" }}%, csapadek max {{ wx.precip_max if wx.precip_max is not none else "n/a" }} mm, homerseklet min/max {{ wx.temp_min if wx.temp_min is not none else "n/a" }}/{{ wx.temp_max if wx.temp_max is not none else "n/a" }} C</div>
             {% if pick.confidence %}
             <div class="small">Biztonsag: {{ pick.confidence.level }}{% if pick.confidence.notes %} ({{ ", ".join(pick.confidence.notes) }}){% endif %}</div>
+            {% endif %}
+            {% if pick.notice %}
+            <div class="notice">{{ pick.notice }}</div>
             {% endif %}
             {% if pick.story %}
             <div class="story-box" style="margin-top:6px;">
