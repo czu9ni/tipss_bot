@@ -91,7 +91,7 @@ TRANSLATE_SOURCE = os.environ.get("TRANSLATE_SOURCE", "auto").strip()
 TRANSLATE_TARGET = os.environ.get("TRANSLATE_TARGET", "hu").strip()
 TRANSLATE_TIMEOUT_SECONDS = float(os.environ.get("TRANSLATE_TIMEOUT_SECONDS", "4"))
 AF_STATS_ENABLED = os.environ.get("AF_STATS_ENABLED", "1") == "1"
-STAT_ONLY_DC_CAP = float(os.environ.get("STAT_ONLY_DC_CAP", "0.80"))
+STAT_ONLY_DC_CAP = float(os.environ.get("STAT_ONLY_DC_CAP", "0.70"))
 RISK_EXCLUDE_CUP = os.environ.get("RISK_EXCLUDE_CUP", "1") == "1"
 RISK_EXCLUDE_DERBY = os.environ.get("RISK_EXCLUDE_DERBY", "1") == "1"
 RISK_EXCLUDE_ROTATION = os.environ.get("RISK_EXCLUDE_ROTATION", "1") == "1"
@@ -442,6 +442,8 @@ FD_STANDINGS_TTL_SECONDS = int(os.environ.get("FD_STANDINGS_TTL_SECONDS", "1800"
 FD_FIXTURES_TTL_SECONDS = int(os.environ.get("FD_FIXTURES_TTL_SECONDS", "120"))
 AF_FIXTURES_TTL_SECONDS = int(os.environ.get("AF_FIXTURES_TTL_SECONDS", "120"))
 SR_FIXTURES_TTL_SECONDS = int(os.environ.get("SR_FIXTURES_TTL_SECONDS", "300"))
+SR_MAX_FIXTURES = int(os.environ.get("SR_MAX_FIXTURES", "200"))
+SPORTRADAR_SCHEDULE_PATH = os.environ.get("SPORTRADAR_SCHEDULE_PATH", "schedules/{date}/schedules.json").strip()
 AF_STATS_TTL_SECONDS = int(os.environ.get("AF_STATS_TTL_SECONDS", "21600"))
 ODDS_CACHE_TTL_SECONDS = int(os.environ.get("ODDS_CACHE_TTL_SECONDS", "90"))
 REFRESH_COOLDOWN_SECONDS = int(os.environ.get("REFRESH_COOLDOWN_SECONDS", "30"))
@@ -3420,8 +3422,9 @@ def _parse_sportradar_event(item: dict) -> dict | None:
     start_time = event.get("start_time") or event.get("scheduled") or event.get("start_time_utc")
     if not start_time:
         return None
-    tournament = event.get("tournament") or {}
-    category = tournament.get("category") if isinstance(tournament, dict) else {}
+    context = event.get("sport_event_context") if isinstance(event.get("sport_event_context"), dict) else {}
+    tournament = event.get("tournament") or context.get("competition") or {}
+    category = context.get("category") if isinstance(context, dict) else {}
     competitors = event.get("competitors") or []
     home_name = None
     away_name = None
@@ -3453,7 +3456,7 @@ def _parse_sportradar_event(item: dict) -> dict | None:
         "comp_code": str(tournament.get("id") or ""),
         "comp_name": comp_name,
         "comp_country": comp_country,
-        "season": tournament.get("season", {}).get("name") if isinstance(tournament, dict) else None,
+        "season": context.get("season", {}).get("name") if isinstance(context, dict) else None,
         "commence_time": str(start_time),
         "home_team": home_name,
         "away_team": away_name,
@@ -3477,14 +3480,19 @@ def _fetch_upcoming_fixtures_sportradar(api_key: str, hours: int = 24, limit: in
         fixtures: list[dict] = []
 
         def _fetch(date_value: str) -> list[dict]:
-            url = f"{base_url}/schedules/{date_value}/schedule.json"
-            response = _http_get(url, params={"api_key": api_key}, timeout=12)
+            path = SPORTRADAR_SCHEDULE_PATH.format(date=date_value)
+            url = f"{base_url}/{path.lstrip('/')}"
+            response = _http_get(
+                url,
+                headers={"x-api-key": api_key, "accept": "application/json"},
+                timeout=12,
+            )
             if response.status_code != 200:
                 if response.status_code == 429:
                     _note_backoff("sportradar")
                 return []
             payload = response.json()
-            events = payload.get("sport_events") or payload.get("sport_events", [])
+            events = payload.get("sport_events") or payload.get("schedules") or []
             if not isinstance(events, list):
                 return []
             return events
@@ -4529,7 +4537,7 @@ def _fetch_public_fixtures(
             allowed_pairs.add((_normalize_comp(name), _normalize_comp(area)))
     fixtures.extend(_fetch_upcoming_fixtures_fd_all(config.football_data_token, window_hours))
     fixtures.extend(_fetch_upcoming_fixtures_api_football(config.api_football_key, window_hours))
-    fixtures.extend(_fetch_upcoming_fixtures_sportradar(config.sportradar_api_key, window_hours))
+    fixtures.extend(_fetch_upcoming_fixtures_sportradar(config.sportradar_api_key, window_hours, SR_MAX_FIXTURES))
     fixtures = _dedupe_fixtures(fixtures)
     now = datetime.now(BUDAPEST_TZ)
     fixtures = [
