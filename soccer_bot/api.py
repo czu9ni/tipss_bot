@@ -24,6 +24,7 @@ class SoccerApiClient:
     def __init__(self, config: ApiConfig) -> None:
         self._config = config
         self._session = requests.Session()
+        self._auth_headers = {"Authorization": f"Bearer {self._config.api_key}"}
         retries = Retry(
             total=config.max_retries,
             backoff_factor=config.backoff_factor,
@@ -34,9 +35,10 @@ class SoccerApiClient:
         adapter = HTTPAdapter(max_retries=retries)
         self._session.mount("http://", adapter)
         self._session.mount("https://", adapter)
+        self._session.headers.update({"User-Agent": "tipss_bot/1.0"})
 
     def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self._config.api_key}"}
+        return dict(self._auth_headers)
 
     def get(self, path: str) -> dict[str, Any]:
         url = urljoin(self._config.base_url.rstrip("/") + "/", path.lstrip("/"))
@@ -46,3 +48,12 @@ class SoccerApiClient:
             logger.error("API error status=%s body=%s", response.status_code, response.text)
             response.raise_for_status()
         return response.json()
+
+    def close(self) -> None:
+        self._session.close()
+
+    def __enter__(self) -> "SoccerApiClient":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        self.close()

@@ -5425,8 +5425,9 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                     away_odds = _find_price(outcomes, away_team)
                     draw_odds = _find_price(outcomes, "Draw")
                     if home_odds is not None and away_odds is not None and draw_odds is not None:
-                        home_stats = get_team_stats(db, home_team)
-                        away_stats = get_team_stats(db, away_team)
+                        local_matches = list_matches(db)
+                        home_stats = get_team_stats(db, home_team, matches=local_matches)
+                        away_stats = get_team_stats(db, away_team, matches=local_matches)
                         stats_factor = (home_stats["win_rate"] - away_stats["win_rate"]) * 0.2
                         home_prob = 1 / home_odds
                         away_prob = 1 / away_odds

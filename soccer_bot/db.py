@@ -8,6 +8,7 @@ class Database:
     connection: sqlite3.Connection
 
     def ensure_schema(self) -> None:
+        global _SCHEMA_READY
         self.connection.execute(
             """
             CREATE TABLE IF NOT EXISTS matches (
@@ -17,16 +18,6 @@ class Database:
                 home_score INTEGER NOT NULL,
                 away_score INTEGER NOT NULL,
                 date TEXT NOT NULL
-            )
-            """
-        )
-        self.connection.execute(
-            """
-            DELETE FROM matches
-            WHERE id NOT IN (
-                SELECT MIN(id)
-                FROM matches
-                GROUP BY home_team, away_team, date
             )
             """
         )
@@ -93,6 +84,18 @@ class Database:
             )
             """
         )
+        if not _SCHEMA_READY:
+            self.connection.execute(
+                """
+                DELETE FROM matches
+                WHERE id NOT IN (
+                    SELECT MIN(id)
+                    FROM matches
+                    GROUP BY home_team, away_team, date
+                )
+                """
+            )
+            _SCHEMA_READY = True
         self.connection.commit()
 
 
@@ -105,3 +108,6 @@ def connect(db_url: str) -> Database:
         path = path[1:]
     connection = sqlite3.connect(path)
     return Database(connection)
+
+
+_SCHEMA_READY = False

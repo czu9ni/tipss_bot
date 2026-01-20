@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Dict
 
 from soccer_bot.db import Database
 
@@ -29,30 +28,31 @@ def list_matches(db: Database) -> list[Match]:
     return [Match(*row) for row in cursor.fetchall()]
 
 
-def get_team_stats(db: Database, team: str) -> Dict[str, float]:
+def get_team_stats(db: Database, team: str, matches: list[Match] | None = None) -> dict[str, float]:
     """Calculate team statistics: win rate, avg goals scored/conceded."""
-    matches = list_matches(db)
-    home_matches = [m for m in matches if m.home_team == team]
-    away_matches = [m for m in matches if m.away_team == team]
-    total_matches = len(home_matches) + len(away_matches)
-    if total_matches == 0:
-        return {"win_rate": 0.0, "avg_goals_scored": 0.0, "avg_goals_conceded": 0.0}
-
+    total_matches = 0
     wins = 0
     goals_scored = 0
     goals_conceded = 0
+    for match in (matches if matches is not None else list_matches(db)):
+        is_home = match.home_team == team
+        is_away = match.away_team == team
+        if not (is_home or is_away):
+            continue
+        total_matches += 1
+        if is_home:
+            if match.home_score > match.away_score:
+                wins += 1
+            goals_scored += match.home_score
+            goals_conceded += match.away_score
+        else:
+            if match.away_score > match.home_score:
+                wins += 1
+            goals_scored += match.away_score
+            goals_conceded += match.home_score
 
-    for match in home_matches:
-        if match.home_score > match.away_score:
-            wins += 1
-        goals_scored += match.home_score
-        goals_conceded += match.away_score
-
-    for match in away_matches:
-        if match.away_score > match.home_score:
-            wins += 1
-        goals_scored += match.away_score
-        goals_conceded += match.home_score
+    if total_matches == 0:
+        return {"win_rate": 0.0, "avg_goals_scored": 0.0, "avg_goals_conceded": 0.0}
 
     return {
         "win_rate": wins / total_matches,
