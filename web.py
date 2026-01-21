@@ -292,6 +292,49 @@ def _api_name_from_url(url: str) -> str | None:
     return None
 
 
+def _reset_sportradar_budget() -> None:
+    with _SR_REFRESH_LOCK:
+        _SR_REFRESH_BUDGET["event"] = SR_MAX_EVENT_CALLS
+        _SR_REFRESH_BUDGET["player"] = SR_MAX_PLAYER_CALLS
+        _SR_REFRESH_BUDGET["live"] = SR_MAX_LIVE_CALLS
+        _SR_REFRESH_BUDGET["mapping"] = SR_MAX_MAPPING_CALLS
+        _SR_REFRESH_BUDGET["push"] = SR_MAX_PUSH_CALLS
+
+
+def _take_sportradar_budget(kind: str, count: int = 1) -> bool:
+    with _SR_REFRESH_LOCK:
+        remaining = _SR_REFRESH_BUDGET.get(kind, 0)
+        if remaining < count:
+            return False
+        _SR_REFRESH_BUDGET[kind] = remaining - count
+        return True
+
+
+def _sr_base_url() -> str:
+    return (config.sportradar_api_base or "https://api.sportradar.com/soccer/trial/v4/en").rstrip("/")
+
+
+def _sr_get(
+    path: str,
+    timeout: float = 12,
+    params: dict | None = None,
+    allow_redirects: bool = True,
+) -> requests.Response | None:
+    if not config.sportradar_api_key:
+        return None
+    url = f"{_sr_base_url()}/{path.lstrip('/')}"
+    try:
+        return _http_get(
+            url,
+            headers={"x-api-key": config.sportradar_api_key, "accept": "application/json"},
+            params=params,
+            timeout=timeout,
+            allow_redirects=allow_redirects,
+        )
+    except Exception:
+        return None
+
+
 def _parse_int_header(headers: dict, *keys: str) -> int | None:
     for key in keys:
         value = headers.get(key)
@@ -473,6 +516,15 @@ _FIXTURE_STATS_CACHE: dict[str, dict[str, object]] = {}
 _TEAM_SQUAD_CACHE: dict[str, dict[str, object]] = {}
 _SR_STANDINGS_CACHE: dict[str, dict[str, object]] = {}
 _SR_STATS_CACHE: dict[str, dict[str, object]] = {}
+_SR_EVENT_CACHE: dict[str, dict[str, object]] = {}
+_SR_COMP_PROFILE_CACHE: dict[str, dict[str, object]] = {}
+_SR_COMP_SUMMARY_CACHE: dict[str, dict[str, object]] = {}
+_SR_PLAYER_PROFILE_CACHE: dict[str, dict[str, object]] = {}
+_SR_PLAYER_SUMMARY_CACHE: dict[str, dict[str, object]] = {}
+_SR_MAPPING_CACHE: dict[str, dict[str, object]] = {}
+_SR_LIVE_CACHE: dict[str, dict[str, object]] = {}
+_SR_REFRESH_BUDGET: dict[str, int] = {"event": 0, "player": 0, "live": 0, "mapping": 0, "push": 0}
+_SR_REFRESH_LOCK = threading.Lock()
 _ODDS_MARKETS_DEFAULT = "h2h,totals,btts,team_totals,spreads,draw_no_bet,double_chance,alternate_totals,alternate_team_totals,alternate_spreads"
 BACKGROUND_REFRESH_SECONDS = int(os.environ.get("BACKGROUND_REFRESH_SECONDS", "600"))
 OFFLINE_FIXTURES_TTL_SECONDS = int(os.environ.get("OFFLINE_FIXTURES_TTL_SECONDS", "3600"))
@@ -480,6 +532,23 @@ TEAM_SQUAD_TTL_SECONDS = int(os.environ.get("TEAM_SQUAD_TTL_SECONDS", "2592000")
 TEAM_SQUAD_MAX_FETCH_PER_MONTH = int(os.environ.get("TEAM_SQUAD_MAX_FETCH_PER_MONTH", "30"))
 SR_STANDINGS_TTL_SECONDS = int(os.environ.get("SR_STANDINGS_TTL_SECONDS", "3600"))
 SR_STATS_TTL_SECONDS = int(os.environ.get("SR_STATS_TTL_SECONDS", "21600"))
+SR_EVENT_TTL_SECONDS = int(os.environ.get("SR_EVENT_TTL_SECONDS", "900"))
+SR_COMP_PROFILE_TTL_SECONDS = int(os.environ.get("SR_COMP_PROFILE_TTL_SECONDS", "86400"))
+SR_COMP_SUMMARY_TTL_SECONDS = int(os.environ.get("SR_COMP_SUMMARY_TTL_SECONDS", "86400"))
+SR_PLAYER_PROFILE_TTL_SECONDS = int(os.environ.get("SR_PLAYER_PROFILE_TTL_SECONDS", "86400"))
+SR_PLAYER_SUMMARY_TTL_SECONDS = int(os.environ.get("SR_PLAYER_SUMMARY_TTL_SECONDS", "86400"))
+SR_MAPPING_TTL_SECONDS = int(os.environ.get("SR_MAPPING_TTL_SECONDS", "2592000"))
+SR_LIVE_TTL_SECONDS = int(os.environ.get("SR_LIVE_TTL_SECONDS", "60"))
+SR_ENABLE_EVENT = os.environ.get("SR_ENABLE_EVENT", "1") == "1"
+SR_ENABLE_PLAYER = os.environ.get("SR_ENABLE_PLAYER", "1") == "1"
+SR_ENABLE_LIVE = os.environ.get("SR_ENABLE_LIVE", "1") == "1"
+SR_ENABLE_MAPPING = os.environ.get("SR_ENABLE_MAPPING", "1") == "1"
+SR_ENABLE_PUSH = os.environ.get("SR_ENABLE_PUSH", "1") == "1"
+SR_MAX_EVENT_CALLS = int(os.environ.get("SR_MAX_EVENT_CALLS", "2"))
+SR_MAX_PLAYER_CALLS = int(os.environ.get("SR_MAX_PLAYER_CALLS", "4"))
+SR_MAX_LIVE_CALLS = int(os.environ.get("SR_MAX_LIVE_CALLS", "3"))
+SR_MAX_MAPPING_CALLS = int(os.environ.get("SR_MAX_MAPPING_CALLS", "1"))
+SR_MAX_PUSH_CALLS = int(os.environ.get("SR_MAX_PUSH_CALLS", "1"))
 
 _RESPONSE_CACHE: dict[str, object] = {"html": "", "ts": 0.0}
 _RESPONSE_LOCK = threading.Lock()
@@ -2205,6 +2274,7 @@ def _enrich_pick(pick: dict) -> dict:
     pick["home_standing"] = _standings_highlight(standings, pick.get("home_team", ""), pick.get("home_id"))
     pick["away_standing"] = _standings_highlight(standings, pick.get("away_team", ""), pick.get("away_id"))
     pick["weather"] = _weather_details(pick.get("home_team", ""))
+    _attach_sportradar_extras(pick)
     if not pick.get("story"):
         pick["story"] = _build_story(pick)
     pick["confidence"] = _confidence_profile(pick)
@@ -2262,6 +2332,10 @@ def _select_stat_picks(picks: list[dict], limit: int = 2) -> tuple[dict | None, 
 def _ensure_pick_fields(pick: dict | None) -> dict | None:
     if not pick:
         return None
+    if not isinstance(pick.get("home_summary"), dict) or "win_rate" not in pick.get("home_summary", {}):
+        pick["home_summary"] = _placeholder_summary()
+    if not isinstance(pick.get("away_summary"), dict) or "win_rate" not in pick.get("away_summary", {}):
+        pick["away_summary"] = _placeholder_summary()
     pick.setdefault("value", 0.0)
     pick.setdefault("model_prob", 0.0)
     pick.setdefault("implied_prob", 0.0)
@@ -3170,6 +3244,18 @@ def _build_story(pick: dict) -> str:
             trend_notes.append(f"{away} forma visszaeso")
     if trend_notes:
         sentences.append("Trend: " + ", ".join(trend_notes) + ".")
+    home_players = pick.get("home_player_count")
+    away_players = pick.get("away_player_count")
+    if isinstance(home_players, int) or isinstance(away_players, int):
+        home_cnt = str(home_players) if isinstance(home_players, int) else "n/a"
+        away_cnt = str(away_players) if isinstance(away_players, int) else "n/a"
+        sentences.append(f"Keretmeret: {home_cnt} vs {away_cnt}.")
+    if pick.get("is_live"):
+        sentences.append("Elo meccs, aktualis status szerint frissulhet.")
+    sr_event = pick.get("sr_event") or {}
+    if isinstance(sr_event, dict) and sr_event.get("status"):
+        status = sr_event.get("status")
+        sentences.append(f"Meccs statusz: {status}.")
 
     reasons = _match_reasons(pick)
     if reasons == ["kiegyensulyozott jelek"]:
@@ -3515,8 +3601,7 @@ def _parse_sportradar_event(item: dict) -> dict | None:
 
 
 def _fetch_upcoming_fixtures_sportradar(api_key: str, hours: int = 24, limit: int = 40) -> list[dict]:
-    base_url = (config.sportradar_api_base or "https://api.sportradar.com/soccer/trial/v4/en").rstrip("/")
-    if not api_key or not base_url:
+    if not api_key:
         return []
     if _backoff_active("sportradar"):
         return []
@@ -3530,12 +3615,7 @@ def _fetch_upcoming_fixtures_sportradar(api_key: str, hours: int = 24, limit: in
 
         def _fetch(date_value: str) -> list[dict]:
             path = SPORTRADAR_SCHEDULE_PATH.format(date=date_value)
-            url = f"{base_url}/{path.lstrip('/')}"
-            response = _http_get(
-                url,
-                headers={"x-api-key": api_key, "accept": "application/json"},
-                timeout=12,
-            )
+            response = _sr_get(path, timeout=12)
             if response.status_code != 200:
                 if response.status_code == 429:
                     _note_backoff("sportradar")
@@ -3700,6 +3780,302 @@ def _fetch_competitor_stats_sportradar(season_id: str, competitor_id: str) -> di
         return stats
     except Exception:
         return {}
+
+
+def _fetch_competitor_profile_sportradar(competitor_id: str) -> dict:
+    if not competitor_id or not SR_ENABLE_PLAYER:
+        return {}
+    cache_key = f"sr:profile:{competitor_id}"
+    cached = _cache_get(_SR_COMP_PROFILE_CACHE, cache_key, SR_COMP_PROFILE_TTL_SECONDS)
+    if isinstance(cached, dict):
+        return cached
+    if not _take_sportradar_budget("player"):
+        return {}
+    response = _sr_get(f"competitors/{competitor_id}/profile.json", timeout=12)
+    if not response or response.status_code != 200:
+        if response and response.status_code == 429:
+            _note_backoff("sportradar")
+        return {}
+    data = response.json()
+    if not isinstance(data, dict):
+        return {}
+    _cache_set(_SR_COMP_PROFILE_CACHE, cache_key, data)
+    return data
+
+
+def _fetch_competitor_summary_sportradar(competitor_id: str) -> dict:
+    if not competitor_id or not SR_ENABLE_PLAYER:
+        return {}
+    cache_key = f"sr:summary:{competitor_id}"
+    cached = _cache_get(_SR_COMP_SUMMARY_CACHE, cache_key, SR_COMP_SUMMARY_TTL_SECONDS)
+    if isinstance(cached, dict):
+        return cached
+    if not _take_sportradar_budget("player"):
+        return {}
+    response = _sr_get(f"competitors/{competitor_id}/summaries.json", timeout=12)
+    if not response or response.status_code != 200:
+        if response and response.status_code == 429:
+            _note_backoff("sportradar")
+        return {}
+    data = response.json()
+    if not isinstance(data, dict):
+        return {}
+    _cache_set(_SR_COMP_SUMMARY_CACHE, cache_key, data)
+    return data
+
+
+def _fetch_player_profile_sportradar(player_id: str) -> dict:
+    if not player_id or not SR_ENABLE_PLAYER:
+        return {}
+    cache_key = f"sr:player:profile:{player_id}"
+    cached = _cache_get(_SR_PLAYER_PROFILE_CACHE, cache_key, SR_PLAYER_PROFILE_TTL_SECONDS)
+    if isinstance(cached, dict):
+        return cached
+    if not _take_sportradar_budget("player"):
+        return {}
+    response = _sr_get(f"players/{player_id}/profile.json", timeout=12)
+    if not response or response.status_code != 200:
+        if response and response.status_code == 429:
+            _note_backoff("sportradar")
+        return {}
+    data = response.json()
+    if not isinstance(data, dict):
+        return {}
+    _cache_set(_SR_PLAYER_PROFILE_CACHE, cache_key, data)
+    return data
+
+
+def _fetch_player_summary_sportradar(player_id: str) -> dict:
+    if not player_id or not SR_ENABLE_PLAYER:
+        return {}
+    cache_key = f"sr:player:summary:{player_id}"
+    cached = _cache_get(_SR_PLAYER_SUMMARY_CACHE, cache_key, SR_PLAYER_SUMMARY_TTL_SECONDS)
+    if isinstance(cached, dict):
+        return cached
+    if not _take_sportradar_budget("player"):
+        return {}
+    response = _sr_get(f"players/{player_id}/summaries.json", timeout=12)
+    if not response or response.status_code != 200:
+        if response and response.status_code == 429:
+            _note_backoff("sportradar")
+        return {}
+    data = response.json()
+    if not isinstance(data, dict):
+        return {}
+    _cache_set(_SR_PLAYER_SUMMARY_CACHE, cache_key, data)
+    return data
+
+
+def _fetch_event_summary_sportradar(event_id: str) -> dict:
+    if not event_id or not SR_ENABLE_EVENT:
+        return {}
+    cache_key = f"sr:event:summary:{event_id}"
+    cached = _cache_get(_SR_EVENT_CACHE, cache_key, SR_EVENT_TTL_SECONDS)
+    if isinstance(cached, dict):
+        return cached
+    if not _take_sportradar_budget("event"):
+        return {}
+    response = _sr_get(f"sport_events/{event_id}/summary.json", timeout=12)
+    if not response or response.status_code != 200:
+        if response and response.status_code == 429:
+            _note_backoff("sportradar")
+        return {}
+    data = response.json()
+    if not isinstance(data, dict):
+        return {}
+    _cache_set(_SR_EVENT_CACHE, cache_key, data)
+    return data
+
+
+def _fetch_event_timeline_sportradar(event_id: str) -> dict:
+    if not event_id or not SR_ENABLE_EVENT:
+        return {}
+    cache_key = f"sr:event:timeline:{event_id}"
+    cached = _cache_get(_SR_EVENT_CACHE, cache_key, SR_EVENT_TTL_SECONDS)
+    if isinstance(cached, dict):
+        return cached
+    if not _take_sportradar_budget("event"):
+        return {}
+    response = _sr_get(f"sport_events/{event_id}/timeline.json", timeout=12)
+    if not response or response.status_code != 200:
+        if response and response.status_code == 429:
+            _note_backoff("sportradar")
+        return {}
+    data = response.json()
+    if not isinstance(data, dict):
+        return {}
+    _cache_set(_SR_EVENT_CACHE, cache_key, data)
+    return data
+
+
+def _fetch_live_schedules_sportradar() -> dict:
+    if not SR_ENABLE_LIVE:
+        return {}
+    cache_key = "sr:live:schedules"
+    cached = _cache_get(_SR_LIVE_CACHE, cache_key, SR_LIVE_TTL_SECONDS)
+    if isinstance(cached, dict):
+        return cached
+    if not _take_sportradar_budget("live"):
+        return {}
+    try:
+        response = _sr_get("schedules/live/schedules.json", timeout=8)
+        if not response or response.status_code != 200:
+            if response and response.status_code == 429:
+                _note_backoff("sportradar")
+            return {}
+        data = response.json()
+        if not isinstance(data, dict):
+            return {}
+        _cache_set(_SR_LIVE_CACHE, cache_key, data)
+        return data
+    except Exception:
+        return {}
+
+
+def _fetch_live_summaries_sportradar() -> dict:
+    if not SR_ENABLE_LIVE:
+        return {}
+    cache_key = "sr:live:summaries"
+    cached = _cache_get(_SR_LIVE_CACHE, cache_key, SR_LIVE_TTL_SECONDS)
+    if isinstance(cached, dict):
+        return cached
+    if not _take_sportradar_budget("live"):
+        return {}
+    try:
+        response = _sr_get("schedules/live/summaries.json", timeout=8)
+        if not response or response.status_code != 200:
+            if response and response.status_code == 429:
+                _note_backoff("sportradar")
+            return {}
+        data = response.json()
+        if not isinstance(data, dict):
+            return {}
+        _cache_set(_SR_LIVE_CACHE, cache_key, data)
+        return data
+    except Exception:
+        return {}
+
+
+def _fetch_live_timeline_delta_sportradar() -> dict:
+    if not SR_ENABLE_LIVE:
+        return {}
+    cache_key = "sr:live:delta"
+    cached = _cache_get(_SR_LIVE_CACHE, cache_key, SR_LIVE_TTL_SECONDS)
+    if isinstance(cached, dict):
+        return cached
+    if not _take_sportradar_budget("live"):
+        return {}
+    try:
+        response = _sr_get("schedules/live/timelines_delta.json", timeout=8)
+        if not response or response.status_code != 200:
+            if response and response.status_code == 429:
+                _note_backoff("sportradar")
+            return {}
+        data = response.json()
+        if not isinstance(data, dict):
+            return {}
+        _cache_set(_SR_LIVE_CACHE, cache_key, data)
+        return data
+    except Exception:
+        return {}
+
+
+def _fetch_mappings_sportradar() -> dict:
+    if not SR_ENABLE_MAPPING:
+        return {}
+    cache_key = "sr:mappings"
+    cached = _cache_get(_SR_MAPPING_CACHE, cache_key, SR_MAPPING_TTL_SECONDS)
+    if isinstance(cached, dict):
+        return cached
+    if not _take_sportradar_budget("mapping"):
+        return {}
+    data = {}
+    try:
+        comp_map = _sr_get("competitors/mappings.json", timeout=10)
+        if comp_map and comp_map.status_code == 200:
+            data["competitors"] = comp_map.json()
+        player_map = _sr_get("players/mappings.json", timeout=10)
+        if player_map and player_map.status_code == 200:
+            data["players"] = player_map.json()
+    except Exception:
+        return {}
+    _cache_set(_SR_MAPPING_CACHE, cache_key, data)
+    return data
+
+
+def _fetch_push_feed_sportradar() -> dict:
+    if not SR_ENABLE_PUSH:
+        return {}
+    cache_key = "sr:push:subscribe"
+    cached = _cache_get(_SR_MAPPING_CACHE, cache_key, SR_MAPPING_TTL_SECONDS)
+    if isinstance(cached, dict):
+        return cached
+    if not _take_sportradar_budget("push"):
+        return {}
+    try:
+        response = _sr_get("stream/events/subscribe", timeout=6, allow_redirects=False)
+        if not response:
+            return {}
+        data = {"status": response.status_code}
+        if response.headers.get("Location"):
+            data["location"] = response.headers.get("Location")
+        _cache_set(_SR_MAPPING_CACHE, cache_key, data)
+        return data
+    except Exception:
+        return {}
+
+
+def _summarize_sr_event(summary: dict, timeline: dict) -> dict:
+    status = ""
+    home_score = None
+    away_score = None
+    if isinstance(summary, dict):
+        se_status = summary.get("sport_event_status") or {}
+        if isinstance(se_status, dict):
+            status = str(se_status.get("status") or se_status.get("match_status") or "")
+            home_score = se_status.get("home_score")
+            away_score = se_status.get("away_score")
+    events_count = 0
+    if isinstance(timeline, dict):
+        events = timeline.get("events")
+        if isinstance(events, list):
+            events_count = len(events)
+    return {
+        "status": status,
+        "home_score": home_score,
+        "away_score": away_score,
+        "events_count": events_count,
+    }
+
+
+def _attach_sportradar_extras(pick: dict) -> None:
+    if not pick:
+        return
+    event_id = pick.get("match_key")
+    if isinstance(event_id, str) and event_id.startswith("sr:sport_event:"):
+        summary = _fetch_event_summary_sportradar(event_id) if SR_ENABLE_EVENT else {}
+        timeline = _fetch_event_timeline_sportradar(event_id) if SR_ENABLE_EVENT else {}
+        if summary or timeline:
+            pick["sr_event"] = _summarize_sr_event(summary, timeline)
+    live_payload = _fetch_live_schedules_sportradar() if SR_ENABLE_LIVE else {}
+    if isinstance(live_payload, dict) and live_payload.get("sport_events"):
+        live_ids = {str(ev.get("sport_event", {}).get("id") or ev.get("id") or "") for ev in live_payload.get("sport_events", [])}
+        if event_id in live_ids:
+            pick["is_live"] = True
+    if SR_ENABLE_PLAYER:
+        for side in ("home", "away"):
+            comp_id = pick.get(f"{side}_id")
+            if isinstance(comp_id, str) and comp_id.startswith("sr:competitor:"):
+                profile = _fetch_competitor_profile_sportradar(comp_id)
+                summary = _fetch_competitor_summary_sportradar(comp_id)
+                if profile:
+                    players = profile.get("players") or []
+                    if isinstance(players, list):
+                        names = [p.get("name") for p in players if isinstance(p, dict) and p.get("name")]
+                        pick[f"{side}_players"] = names[:2]
+                        pick[f"{side}_player_count"] = len(names)
+                if summary:
+                    pick[f"{side}_sr_summary"] = {"tournaments": len(summary.get("summaries") or [])}
 
 
 def _team_recent_matches_sportradar(competitor_id: str, limit: int = 5) -> list[dict]:
@@ -5744,6 +6120,7 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
 
     if refresh_requested:
         cached_updated_at = None
+        _reset_sportradar_budget()
         pre_month, _ = _api_usage_counts()
         try:
             diag_counts = _diagnostics_fixtures(config.football_data_token, competitions, window_hours)
@@ -5997,8 +6374,17 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                     "refresh_usage": refresh_usage,
                 },
             )
+            if SR_ENABLE_MAPPING:
+                _fetch_mappings_sportradar()
+            if SR_ENABLE_PUSH:
+                _fetch_push_feed_sportradar()
+            if SR_ENABLE_LIVE:
+                _fetch_live_schedules_sportradar()
+                _fetch_live_summaries_sportradar()
+                _fetch_live_timeline_delta_sportradar()
         except Exception:
-            pass
+            print("[ERROR] refresh failed")
+            print(traceback.format_exc())
         finally:
             best_pick, target_matches = _enforce_tip_presence(best_pick, target_matches)
         _settle_saved_picks(db, config.odds_api_key)
