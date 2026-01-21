@@ -545,8 +545,8 @@ SR_ENABLE_LIVE = os.environ.get("SR_ENABLE_LIVE", "1") == "1"
 SR_ENABLE_MAPPING = os.environ.get("SR_ENABLE_MAPPING", "1") == "1"
 SR_ENABLE_PUSH = os.environ.get("SR_ENABLE_PUSH", "1") == "1"
 SR_MAX_EVENT_CALLS = int(os.environ.get("SR_MAX_EVENT_CALLS", "2"))
-SR_MAX_PLAYER_CALLS = int(os.environ.get("SR_MAX_PLAYER_CALLS", "4"))
-SR_MAX_LIVE_CALLS = int(os.environ.get("SR_MAX_LIVE_CALLS", "3"))
+SR_MAX_PLAYER_CALLS = int(os.environ.get("SR_MAX_PLAYER_CALLS", "2"))
+SR_MAX_LIVE_CALLS = int(os.environ.get("SR_MAX_LIVE_CALLS", "1"))
 SR_MAX_MAPPING_CALLS = int(os.environ.get("SR_MAX_MAPPING_CALLS", "1"))
 SR_MAX_PUSH_CALLS = int(os.environ.get("SR_MAX_PUSH_CALLS", "1"))
 
@@ -6374,14 +6374,15 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                     "refresh_usage": refresh_usage,
                 },
             )
-            if SR_ENABLE_MAPPING:
-                _fetch_mappings_sportradar()
-            if SR_ENABLE_PUSH:
-                _fetch_push_feed_sportradar()
-            if SR_ENABLE_LIVE:
-                _fetch_live_schedules_sportradar()
-                _fetch_live_summaries_sportradar()
-                _fetch_live_timeline_delta_sportradar()
+            if target_matches:
+                if SR_ENABLE_MAPPING:
+                    _fetch_mappings_sportradar()
+                if SR_ENABLE_PUSH:
+                    _fetch_push_feed_sportradar()
+                if SR_ENABLE_LIVE:
+                    _fetch_live_schedules_sportradar()
+                    _fetch_live_summaries_sportradar()
+                    _fetch_live_timeline_delta_sportradar()
         except Exception:
             print("[ERROR] refresh failed")
             print(traceback.format_exc())
