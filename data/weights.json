@@ -1,25 +1,25 @@
 {
-  "elo": 0.30,
-  "form": 0.20,
-  "table": 0.05,
-  "market": 0.15,
-  "injury": 0.05,
-  "weather": 0.05,
-  "news": 0.20,
+  "elo": 0.28,
+  "form": 0.27,
+  "table": 0.12,
+  "market": 0.07,
+  "injury": 0.06,
+  "weather": 0.04,
+  "news": 0.16,
   "model": {
     "beta0": -0.2,
-    "beta_elo": 0.8,
-    "beta_form": 0.6,
-    "beta_table": 0.25,
+    "beta_elo": 0.75,
+    "beta_form": 0.75,
+    "beta_table": 0.35,
     "beta_xg": 0.5,
     "beta_lineup": 0.35,
     "beta_injury": -0.45,
     "beta_weather": -0.25,
-    "beta_news": 0.12
+    "beta_news": 0.1
   },
   "final": {
-    "value": 0.5,
-    "prob": 0.3,
-    "news": 0.2
+    "value": 0.45,
+    "prob": 0.4,
+    "news": 0.15
   }
 }

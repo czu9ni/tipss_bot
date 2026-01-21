@@ -231,6 +231,9 @@
           <div class="pill" title="Automatikus frissites">
             <span class="dot good"></span> Auto frissites - <strong>{{ "aktiv" if refresh_requested else "varakozik" }}</strong>
           </div>
+          <div class="pill" title="Hatekonysag">
+            <span class="dot good"></span> Hatekonysag - <strong>{{ efficiency_score }}/10</strong>
+          </div>
         </div>
       </div>
 
@@ -279,6 +282,18 @@
           <p class="muted" style="margin-top:10px">Odds API hiba: {{ odds_error }}</p>
           {% endif %}
           <p class="muted" style="margin-top:6px">Diagnosztika 24h: ligak meccs = {{ diag_counts.comp_24 }}, osszes meccs = {{ diag_counts.all_24 }}, api-football = {{ diag_counts.api_football_24 }}, ablak = {{ diag_counts.window_from }}..{{ diag_counts.window_to }}, ido forras = {{ diag_counts.window_source }}, api-football kulcs = {{ "igen" if diag_counts.api_football_enabled else "nem" }}</p>
+          {% if backtest_mode %}
+          <div style="margin-top:12px; display:flex; flex-wrap:wrap; gap:8px">
+            <a class="btn secondary" href="/api/odds/openers?date={{ today_date }}" target="_blank">Openers</a>
+            <a class="btn secondary" href="/api/odds/closing?date={{ today_date }}" target="_blank">Closing</a>
+            <a class="btn secondary" href="/api/odds/delta?date={{ today_date }}" target="_blank">Delta</a>
+            <form action="/api/odds/lines" method="get" target="_blank" style="display:inline-flex; gap:6px; align-items:center">
+              <input type="hidden" name="date" value="{{ today_date }}">
+              <input name="event_id" placeholder="line_id" style="padding:6px 8px; border-radius:10px; border:1px solid rgba(255,255,255,.2); background:rgba(0,0,0,.2); color:#fff">
+              <button class="btn secondary" type="submit">Lines</button>
+            </form>
+          </div>
+          {% endif %}
         </div>
       </section>
 
@@ -693,89 +708,6 @@
         </div>
       </section>
 
-      <section class="card">
-        <div class="card-head">
-          <h2 class="card-title">Legutobbi meccsek</h2>
-          <span class="badge">Az ajánlott csapatok</span>
-        </div>
-        <div class="card-body">
-          {% if tip_team_sections %}
-          <div class="list">
-            {% for team in tip_team_sections %}
-            <div class="row">
-              <div class="left">
-                <div class="icon" aria-hidden="true">{{ team.label }}</div>
-                <div>
-                  <div class="name">{{ team.team }}</div>
-                  <div class="meta">
-                    {{ "%.0f"|format(team.win_rate * 100) if team.win_rate is not none else "n/a" }}% nyeresi arany ·
-                    Over {{ "%.0f"|format(team.over25_rate * 100) if team.over25_rate is not none else "n/a" }}% ·
-                    GG {{ "%.0f"|format(team.btts_rate * 100) if team.btts_rate is not none else "n/a" }}%
-                  </div>
-                </div>
-              </div>
-              <div class="status ok">
-                <span class="dot good"></span>
-                Tabella: {{ team.standing.position if team.standing.position else "n/a" }}
-              </div>
-            </div>
-            <table>
-              <thead>
-                <tr><th>Dátum</th><th>Bajnokság</th><th>Ellenfél</th><th>Eredmény</th></tr>
-              </thead>
-              <tbody>
-                {% for row in team.matches %}
-                <tr>
-                  <td>{{ row.date }}</td>
-                  <td>{{ row.competition if row.competition else "-" }}{% if row.competition_type %} ({{ row.competition_type }}){% endif %}</td>
-                  <td>{{ row.opponent }}</td>
-                  <td><span class="pillscore">{{ row.score }}</span></td>
-                </tr>
-                {% endfor %}
-                {% if not team.matches %}
-                <tr>
-                  <td colspan="4" class="muted">Nincs elérhető mérkőzés.</td>
-                </tr>
-                {% endif %}
-              </tbody>
-            </table>
-            {% endfor %}
-          </div>
-          {% else %}
-          <div class="muted">Nincs elérhető legutóbbi meccs az ajánlott csapatokra.</div>
-          {% endif %}
-        </div>
-      </section>
-
-      <section class="card">
-        <div class="card-head">
-          <h2 class="card-title">Tabella</h2>
-          <span class="badge">Az ajánlott csapatok</span>
-        </div>
-        <div class="card-body">
-          {% if tip_table_rows %}
-          <table>
-            <thead>
-              <tr><th>Hely</th><th>Csapat</th><th>Pont</th><th>Meccs</th><th>Gólok</th></tr>
-            </thead>
-            <tbody>
-              {% for row in tip_table_rows %}
-              <tr>
-                <td>{{ row.position if row.position else "n/a" }}</td>
-                <td>{{ row.team }}</td>
-                <td><span class="pillpts">{{ row.points if row.points is not none else "n/a" }}</span></td>
-                <td>{{ row.played if row.played is not none else "n/a" }}</td>
-                <td>{{ row.goals_for if row.goals_for is not none else "n/a" }}-{{ row.goals_against if row.goals_against is not none else "n/a" }}</td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-          {% else %}
-          <div class="muted">Nincs tabellaadat az ajánlott csapatokra.</div>
-          {% endif %}
-        </div>
-      </section>
-
     <section class="card span2">
       <div class="card-head">
         <h2 class="card-title">Hir-osszefoglalo (RSS)</h2>
@@ -797,7 +729,7 @@
             {% endfor %}
           </div>
           {% else %}
-          <div class="muted">Nincs elerheto hir.</div>
+          <div class="muted">Nincs relevans hir a csapatokrol vagy jatekosokrol a forrasokban.</div>
           {% endif %}
         </div>
       </section>
