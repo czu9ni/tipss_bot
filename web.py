@@ -455,6 +455,7 @@ _TEAM_ID_MAP: dict[str, int] | None = None
 _FORM_CACHE: dict[int, dict[str, float]] = {}
 _FORM_CACHE_TTL_SECONDS = 3600
 _STANDINGS_CACHE: dict[str, list[dict]] = {}
+_TEAM_SEASON_HINT: dict[str, str] = {}
 _FD_COMP_CACHE: dict[str, dict[str, object]] = {}
 _FD_RECENT_CACHE: dict[str, dict[str, object]] = {}
 _FD_STANDINGS_CACHE: dict[str, dict[str, object]] = {}
@@ -470,11 +471,13 @@ _TRANSLATE_CACHE: dict[str, dict[str, object]] = {}
 _TEAM_ID_CACHE: dict[str, dict[str, object]] = {}
 _FIXTURE_STATS_CACHE: dict[str, dict[str, object]] = {}
 _TEAM_SQUAD_CACHE: dict[str, dict[str, object]] = {}
+_SR_STANDINGS_CACHE: dict[str, dict[str, object]] = {}
 _ODDS_MARKETS_DEFAULT = "h2h,totals,btts,team_totals,spreads,draw_no_bet,double_chance,alternate_totals,alternate_team_totals,alternate_spreads"
 BACKGROUND_REFRESH_SECONDS = int(os.environ.get("BACKGROUND_REFRESH_SECONDS", "600"))
 OFFLINE_FIXTURES_TTL_SECONDS = int(os.environ.get("OFFLINE_FIXTURES_TTL_SECONDS", "3600"))
 TEAM_SQUAD_TTL_SECONDS = int(os.environ.get("TEAM_SQUAD_TTL_SECONDS", "2592000"))
 TEAM_SQUAD_MAX_FETCH_PER_MONTH = int(os.environ.get("TEAM_SQUAD_MAX_FETCH_PER_MONTH", "30"))
+SR_STANDINGS_TTL_SECONDS = int(os.environ.get("SR_STANDINGS_TTL_SECONDS", "3600"))
 
 _RESPONSE_CACHE: dict[str, object] = {"html": "", "ts": 0.0}
 _RESPONSE_LOCK = threading.Lock()
@@ -1848,7 +1851,10 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
     cache_key = f"{_normalize_team_name(team_name)}:{team_id or ''}"
     cached = _cache_get(_TEAM_SUMMARY_CACHE, cache_key, TEAM_SUMMARY_TTL_SECONDS)
     if isinstance(cached, dict):
-        return cached
+        if isinstance(team_id, str) and team_id.startswith("sr:competitor:") and cached.get("source") == "n/a":
+            cached = None
+        else:
+            return cached
     team_norm = _normalize_team_name(team_name)
     comp_hint = _TEAM_COMP_HINT.get(team_norm)
     league_code = _fdco_league_code(comp_hint)
@@ -1858,7 +1864,7 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
     cards_avg = None
     team_id_af = team_id
     team_id_fd = _team_id_map().get(_normalize_name(team_name))
-    if team_id_af is None:
+    if team_id_af is None and (team_id is None or isinstance(team_id, int)):
         team_id_af = _api_football_team_id(config.api_football_key, team_name)
     table_entry: dict[str, object] | None = None
     if comp_hint:
@@ -1868,6 +1874,10 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
             table_entry = None
         if team_id_fd is None and table_entry and table_entry.get("team_id"):
             team_id_fd = table_entry.get("team_id")
+    season_hint = _TEAM_SEASON_HINT.get(team_norm)
+    if table_entry is None and season_hint:
+        standings = _fetch_standings_sportradar(season_hint)
+        table_entry = _standings_highlight(standings, team_name, team_id if isinstance(team_id, str) else None)
     if team_id_fd is None and team_id is not None and comp_hint:
         team_id_fd = team_id
     if league_code:
@@ -1915,6 +1925,10 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
 
     matches = _team_recent_matches_api_football(config.api_football_key, team_id_af, limit=5)
     source = "api-football" if matches else "football-data"
+    if not matches:
+        if isinstance(team_id, str) and team_id.startswith("sr:competitor:"):
+            matches = _team_recent_matches_sportradar(team_id, limit=5)
+            source = "sportradar" if matches else source
     if not matches:
         matches = _team_recent_matches_fd(config.football_data_token, team_id_fd, limit=5)
     if not matches:
@@ -2139,10 +2153,18 @@ def _filter_picks_by_risk(picks: list[dict]) -> list[dict]:
 def _enrich_pick(pick: dict) -> dict:
     if not pick:
         return pick
+    if pick.get("sport_key", "").startswith("sr:competition:"):
+        pick.setdefault("comp_code", pick.get("sport_key"))
     comp_hint = pick.get("fd_code") or pick.get("comp_code") or _sport_key_to_comp(pick.get("sport_key", ""))
     if comp_hint and pick.get("home_team") and pick.get("away_team"):
         _TEAM_COMP_HINT[_normalize_team_name(pick.get("home_team", ""))] = str(comp_hint)
         _TEAM_COMP_HINT[_normalize_team_name(pick.get("away_team", ""))] = str(comp_hint)
+    if pick.get("sport_key", "").startswith("sr:competition:") and not pick.get("sr_season_id"):
+        _fill_sportradar_ids(pick)
+    sr_season_id = pick.get("sr_season_id")
+    if sr_season_id and pick.get("home_team") and pick.get("away_team"):
+        _TEAM_SEASON_HINT[_normalize_team_name(pick.get("home_team", ""))] = str(sr_season_id)
+        _TEAM_SEASON_HINT[_normalize_team_name(pick.get("away_team", ""))] = str(sr_season_id)
     pick["home_summary"] = _summary_dict(pick.get("home_team", ""), pick.get("home_id"))
     pick["away_summary"] = _summary_dict(pick.get("away_team", ""), pick.get("away_id"))
     standings = []
@@ -2154,6 +2176,9 @@ def _enrich_pick(pick: dict) -> dict:
     season = pick.get("season")
     season = int(season) if isinstance(season, int) else _season_for_date(pick.get("commence_time"))
     standings = _fetch_standings_api_football(config.api_football_key, league_id, season)
+    if not standings:
+        if sr_season_id:
+            standings = _fetch_standings_sportradar(str(sr_season_id))
     if not standings:
         comp_code = pick.get("fd_code") or _sport_key_to_comp(pick.get("sport_key", ""))
         standings = _fetch_standings(comp_code)
@@ -3446,10 +3471,13 @@ def _parse_sportradar_event(item: dict) -> dict | None:
         return None
     comp_name = ""
     comp_country = ""
+    season_id = ""
     if isinstance(tournament, dict):
         comp_name = str(tournament.get("name") or "")
         if isinstance(category, dict):
             comp_country = str(category.get("name") or "")
+    if isinstance(context, dict):
+        season_id = str(context.get("season", {}).get("id") or "")
     return {
         "id": event.get("id"),
         "sport_key": str(tournament.get("id") or comp_name),
@@ -3457,6 +3485,8 @@ def _parse_sportradar_event(item: dict) -> dict | None:
         "comp_name": comp_name,
         "comp_country": comp_country,
         "season": context.get("season", {}).get("name") if isinstance(context, dict) else None,
+        "sr_season_id": season_id,
+        "sr_competition_id": str(tournament.get("id") or ""),
         "commence_time": str(start_time),
         "home_team": home_name,
         "away_team": away_name,
@@ -3514,6 +3544,178 @@ def _fetch_upcoming_fixtures_sportradar(api_key: str, hours: int = 24, limit: in
         fixtures = fixtures[:limit]
         _cache_set(_SR_FIXTURES_CACHE, cache_key, fixtures)
         return fixtures
+    except Exception:
+        return []
+
+
+def _fill_sportradar_ids(pick: dict) -> None:
+    if not pick or not config.sportradar_api_key:
+        return
+    if pick.get("sr_season_id"):
+        return
+    home = pick.get("home_team")
+    away = pick.get("away_team")
+    if not home or not away:
+        return
+    fixtures = _fetch_upcoming_fixtures_sportradar(config.sportradar_api_key, 24, SR_MAX_FIXTURES)
+    pick_dt = _parse_match_dt(pick)
+    home_norm = _normalize_team_name(home)
+    away_norm = _normalize_team_name(away)
+    for item in fixtures:
+        if _normalize_team_name(item.get("home_team", "")) != home_norm:
+            continue
+        if _normalize_team_name(item.get("away_team", "")) != away_norm:
+            continue
+        if pick_dt and (dt := _parse_match_dt(item)):
+            if abs((dt - pick_dt).total_seconds()) > 7200:
+                continue
+        if not pick.get("home_id"):
+            pick["home_id"] = item.get("home_id")
+        if not pick.get("away_id"):
+            pick["away_id"] = item.get("away_id")
+        if not pick.get("comp_code"):
+            pick["comp_code"] = item.get("comp_code")
+        pick["sr_season_id"] = item.get("sr_season_id")
+        break
+
+
+def _extract_sr_standings(payload: dict) -> list[dict]:
+    rows: list[dict] = []
+    standings = payload.get("standings")
+    if not isinstance(standings, list):
+        return rows
+    for entry in standings:
+        if not isinstance(entry, dict):
+            continue
+        groups = entry.get("groups")
+        if not isinstance(groups, list):
+            continue
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            group_rows = group.get("standings")
+            if not isinstance(group_rows, list):
+                continue
+            for row in group_rows:
+                if not isinstance(row, dict):
+                    continue
+                comp = row.get("competitor") or {}
+                name = str(comp.get("name") or "")
+                team_id = comp.get("id")
+                if not name:
+                    continue
+                points = row.get("points")
+                rank = row.get("rank") or row.get("position")
+                rows.append(
+                    {
+                        "team": name,
+                        "team_id": team_id,
+                        "points": int(points) if isinstance(points, (int, float)) else None,
+                        "position": int(rank) if isinstance(rank, (int, float)) else None,
+                    }
+                )
+    return rows
+
+
+def _fetch_standings_sportradar(season_id: str) -> list[dict]:
+    if not season_id:
+        return []
+    if _backoff_active("sportradar"):
+        return []
+    cache_key = f"sr:{season_id}"
+    cached = _cache_get(_SR_STANDINGS_CACHE, cache_key, SR_STANDINGS_TTL_SECONDS)
+    if isinstance(cached, list):
+        return cached
+    base_url = (config.sportradar_api_base or "https://api.sportradar.com/soccer/trial/v4/en").rstrip("/")
+    url = f"{base_url}/seasons/{season_id}/standings.json"
+    try:
+        response = _http_get(url, headers={"x-api-key": config.sportradar_api_key, "accept": "application/json"}, timeout=12)
+        if response.status_code != 200:
+            if response.status_code == 429:
+                _note_backoff("sportradar")
+            return []
+        data = response.json()
+        rows = _extract_sr_standings(data)
+        _cache_set(_SR_STANDINGS_CACHE, cache_key, rows)
+        return rows
+    except Exception:
+        return []
+
+
+def _team_recent_matches_sportradar(competitor_id: str, limit: int = 5) -> list[dict]:
+    if not competitor_id:
+        return []
+    if _backoff_active("sportradar"):
+        return []
+    cache_key = f"sr:recent:{competitor_id}"
+    cached = _cache_get(_TEAM_RECENT_CACHE, cache_key, TEAM_SUMMARY_TTL_SECONDS)
+    if isinstance(cached, list):
+        return cached[:limit]
+    base_url = (config.sportradar_api_base or "https://api.sportradar.com/soccer/trial/v4/en").rstrip("/")
+    url = f"{base_url}/competitors/{competitor_id}/schedules.json"
+    try:
+        response = _http_get(url, headers={"x-api-key": config.sportradar_api_key, "accept": "application/json"}, timeout=12)
+        if response.status_code != 200:
+            if response.status_code == 429:
+                _note_backoff("sportradar")
+            return []
+        data = response.json()
+        schedules = data.get("schedules") or []
+        rows = []
+        for item in schedules:
+            ev = item.get("sport_event") if isinstance(item, dict) else None
+            status = item.get("sport_event_status") if isinstance(item, dict) else None
+            if not isinstance(ev, dict) or not isinstance(status, dict):
+                continue
+            start_time = ev.get("start_time") or ev.get("scheduled")
+            if not start_time:
+                continue
+            match_status = str(status.get("match_status") or status.get("status") or "").lower()
+            if match_status not in {"ended", "finished", "closed"}:
+                continue
+            home_score = status.get("home_score")
+            away_score = status.get("away_score")
+            if not isinstance(home_score, (int, float)) or not isinstance(away_score, (int, float)):
+                continue
+            competitors = ev.get("competitors") or []
+            home = next((c for c in competitors if isinstance(c, dict) and c.get("qualifier") == "home"), None)
+            away = next((c for c in competitors if isinstance(c, dict) and c.get("qualifier") == "away"), None)
+            if not home or not away:
+                continue
+            home_id = home.get("id")
+            away_id = away.get("id")
+            if competitor_id not in {home_id, away_id}:
+                continue
+            is_home = competitor_id == home_id
+            gf = home_score if is_home else away_score
+            ga = away_score if is_home else home_score
+            context = ev.get("sport_event_context") if isinstance(ev.get("sport_event_context"), dict) else {}
+            comp_name = ""
+            if isinstance(context, dict):
+                comp = context.get("competition") or {}
+                comp_name = str(comp.get("name") or "")
+            utc_date = str(start_time)
+            date = utc_date.split("T", 1)[0] if "T" in utc_date else utc_date
+            result = "D"
+            if gf > ga:
+                result = "W"
+            elif gf < ga:
+                result = "L"
+            rows.append(
+                {
+                    "date": date,
+                    "opponent": away.get("name") if is_home else home.get("name"),
+                    "score": f"{int(gf)}-{int(ga)}",
+                    "home": is_home,
+                    "competition": comp_name,
+                    "gf": int(gf),
+                    "ga": int(ga),
+                    "result": result,
+                }
+            )
+        rows.sort(key=lambda r: r.get("date", ""), reverse=True)
+        _cache_set(_TEAM_RECENT_CACHE, cache_key, rows)
+        return rows[:limit]
     except Exception:
         return []
 def _fetch_upcoming_fixtures_fd_all(token: str, hours: int = 24, limit: int = 40) -> list[dict]:
@@ -4411,10 +4613,12 @@ def _stat_pick_for_match(
         "home_team": home_team,
         "away_team": away_team,
         "competition": _match_competition(match),
+        "comp_code": match.get("comp_code"),
         "fd_code": match.get("fd_code"),
         "home_id": match.get("home_id"),
         "away_id": match.get("away_id"),
         "season": match.get("season"),
+        "sr_season_id": match.get("sr_season_id"),
         "sport_key": match.get("sport_key", ""),
         "commence_time": match.get("commence_time", ""),
         "market_key": market_key,
@@ -4471,9 +4675,13 @@ def _build_stat_only_picks(
         comp_code = match.get("comp_code") or match.get("sport_key", "")
         comp_standings = standings_by_comp.get(comp_code, [])
         table_scores = _table_scores_from_standings(comp_standings)
-        if comp_code:
-            _TEAM_COMP_HINT[_normalize_team_name(match.get("home_team", ""))] = str(comp_code)
-            _TEAM_COMP_HINT[_normalize_team_name(match.get("away_team", ""))] = str(comp_code)
+    if comp_code:
+        _TEAM_COMP_HINT[_normalize_team_name(match.get("home_team", ""))] = str(comp_code)
+        _TEAM_COMP_HINT[_normalize_team_name(match.get("away_team", ""))] = str(comp_code)
+    sr_season_id = match.get("sr_season_id")
+    if sr_season_id:
+        _TEAM_SEASON_HINT[_normalize_team_name(match.get("home_team", ""))] = str(sr_season_id)
+        _TEAM_SEASON_HINT[_normalize_team_name(match.get("away_team", ""))] = str(sr_season_id)
         pick = _stat_pick_for_match(match, comp_standings, table_scores, news_items, weights, roi_map)
         if pick:
             picks.append(pick)
@@ -4593,6 +4801,15 @@ def _fetch_public_fixtures(
         standings_limit = int(os.environ.get("FD_STANDINGS_LIMIT", "6"))
         for code in comp_codes[:standings_limit]:
             standings_by_comp[code] = _fetch_standings_fd(config.football_data_token, code)
+    sr_season_ids: dict[str, str] = {}
+    for item in fixtures:
+        comp_code = str(item.get("comp_code") or "")
+        season_id = str(item.get("sr_season_id") or "")
+        if comp_code and season_id and comp_code not in sr_season_ids:
+            sr_season_ids[comp_code] = season_id
+    sr_limit = int(os.environ.get("SR_STANDINGS_LIMIT", "4"))
+    for comp_code, season_id in list(sr_season_ids.items())[:sr_limit]:
+        standings_by_comp[comp_code] = _fetch_standings_sportradar(season_id)
     if STAT_ONLY_MAX_FIXTURES > 0 and len(fixtures) > STAT_ONLY_MAX_FIXTURES:
         fixtures = fixtures[:STAT_ONLY_MAX_FIXTURES]
     offline = _load_offline_fixtures()
