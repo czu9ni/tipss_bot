@@ -75,6 +75,93 @@ def _therundown_client() -> TheRundownClient:
 def _cache_dir() -> str:
     return os.environ.get("CACHE_DIR", os.path.join("data", "cache"))
 
+
+def _therundown_sport_ids() -> list[str]:
+    raw = os.environ.get("THERUNDOWN_SPORT_ID_SOCCER", "").strip()
+    if not raw:
+        return ["16"]
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _therundown_event_key(date_str: str, home: str, away: str) -> str:
+    return f"{date_str}|{_normalize_team_name(home)}|{_normalize_team_name(away)}"
+
+
+def _therundown_markets_to_bookmakers(markets: dict[str, dict], home: str, away: str) -> list[dict]:
+    if not markets:
+        return []
+    bookmaker = {"key": "therundown", "title": "TheRundown", "markets": []}
+    h2h = markets.get("1x2") or {}
+    if h2h:
+        outcomes = []
+        if isinstance(h2h.get("home"), (int, float)):
+            outcomes.append({"name": home, "price": float(h2h["home"])})
+        if isinstance(h2h.get("draw"), (int, float)):
+            outcomes.append({"name": "Draw", "price": float(h2h["draw"])})
+        if isinstance(h2h.get("away"), (int, float)):
+            outcomes.append({"name": away, "price": float(h2h["away"])})
+        if outcomes:
+            bookmaker["markets"].append({"key": "h2h", "outcomes": outcomes})
+    totals = markets.get("over_under") or {}
+    if totals:
+        outcomes = []
+        if isinstance(totals.get("over_2.5"), (int, float)):
+            outcomes.append({"name": "Over", "point": 2.5, "price": float(totals["over_2.5"])})
+        if isinstance(totals.get("under_2.5"), (int, float)):
+            outcomes.append({"name": "Under", "point": 2.5, "price": float(totals["under_2.5"])})
+        if outcomes:
+            bookmaker["markets"].append({"key": "totals", "outcomes": outcomes})
+    btts = markets.get("btts") or {}
+    if btts:
+        outcomes = []
+        if isinstance(btts.get("yes"), (int, float)):
+            outcomes.append({"name": "Yes", "price": float(btts["yes"])})
+        if isinstance(btts.get("no"), (int, float)):
+            outcomes.append({"name": "No", "price": float(btts["no"])})
+        if outcomes:
+            bookmaker["markets"].append({"key": "btts", "outcomes": outcomes})
+    dc = markets.get("double_chance") or {}
+    if dc:
+        outcomes = []
+        if isinstance(dc.get("1x"), (int, float)):
+            outcomes.append({"name": "1X", "price": float(dc["1x"])})
+        if isinstance(dc.get("x2"), (int, float)):
+            outcomes.append({"name": "X2", "price": float(dc["x2"])})
+        if isinstance(dc.get("12"), (int, float)):
+            outcomes.append({"name": "12", "price": float(dc["12"])})
+        if outcomes:
+            bookmaker["markets"].append({"key": "double_chance", "outcomes": outcomes})
+    if bookmaker["markets"]:
+        return [bookmaker]
+    return []
+
+
+def _therundown_update_match_odds(match: dict, line_id: str, client: TheRundownClient) -> None:
+    if not line_id:
+        return
+    markets: dict[str, dict] = {}
+    try:
+        moneyline = client.moneyline(line_id)
+        markets.update(client.markets_from_moneyline(moneyline))
+    except Exception:
+        pass
+    try:
+        totals = client.totals(line_id)
+        markets.update(client.markets_from_totals(totals))
+    except Exception:
+        pass
+    try:
+        spread = client.spread(line_id)
+        markets.update(client.markets_from_spread(spread))
+    except Exception:
+        pass
+    if markets:
+        match["bookmakers"] = _therundown_markets_to_bookmakers(
+            markets,
+            match.get("home_team", ""),
+            match.get("away_team", ""),
+        )
+
 BASIC_AUTH_USER = os.environ.get("BASIC_AUTH_USER", "")
 BASIC_AUTH_PASSWORD = os.environ.get("BASIC_AUTH_PASSWORD", "")
 ALLOWED_IPS = {ip.strip() for ip in os.environ.get("ALLOWED_IPS", "127.0.0.1,::1").split(",") if ip.strip()}
@@ -6025,6 +6112,20 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
     cached = _load_cached_picks(db)
     market_roi = _market_roi_map(db)
     cached_updated_at = cached.get("updated_at") if cached else None
+    bypass_cooldown = False
+    if cached and cached_updated_at:
+        cached_dt = _parse_iso_datetime(cached_updated_at)
+        if cached_dt and not _same_local_day(cached_dt, BUDAPEST_TZ):
+            refresh_requested = True
+            bypass_cooldown = True
+        if _therundown_enabled():
+            picks_check = cached.get("target_matches") or []
+            if not picks_check and cached.get("best_pick"):
+                picks_check = [cached.get("best_pick")]
+            missing_odds = any((p.get("odds") in (None, 0, "-", "n/a")) for p in picks_check if p)
+            if missing_odds:
+                refresh_requested = True
+                bypass_cooldown = True
     if not refresh_requested:
         if not cached:
             refresh_requested = True
@@ -6040,13 +6141,13 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
             cached_dt = _parse_iso_datetime(cached_updated_at)
             if cached_dt and cached_dt < _SERVER_STARTED_AT:
                 refresh_requested = True
-    if refresh_requested and not force_refresh and cached_updated_at and REFRESH_COOLDOWN_SECONDS > 0:
+    if refresh_requested and not force_refresh and cached_updated_at and REFRESH_COOLDOWN_SECONDS > 0 and not bypass_cooldown:
         cached_dt = _parse_iso_datetime(cached_updated_at)
         if cached_dt:
             age = (datetime.now(timezone.utc) - cached_dt).total_seconds()
             if age < REFRESH_COOLDOWN_SECONDS:
                 refresh_requested = False
-    if refresh_requested and not force_refresh and cached_updated_at and MIN_API_REFRESH_SECONDS > 0:
+    if refresh_requested and not force_refresh and cached_updated_at and MIN_API_REFRESH_SECONDS > 0 and not bypass_cooldown:
         cached_dt = _parse_iso_datetime(cached_updated_at)
         if cached_dt:
             age = (datetime.now(timezone.utc) - cached_dt).total_seconds()
@@ -6069,6 +6170,8 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
         standings = _fetch_standings_fd(config.football_data_token, primary)
 
     odds_data = None
+    therundown_map: dict[str, dict] = {}
+    therundown_events: list[dict] = []
     target_matches = []
     rss_items: list[dict] = []
     news_blocks: list[dict] = []
@@ -6085,7 +6188,73 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
         pre_month, _ = _api_usage_counts()
         try:
             diag_counts = _diagnostics_fixtures(config.football_data_token, competitions, window_hours)
-            if not config.odds_api_key:
+            use_therundown = False
+            if _therundown_enabled():
+                td_logger = logging.getLogger("therundown_web")
+                td_client = _therundown_client()
+                cache = DiskCache(_cache_dir())
+                date_str = datetime.now(BUDAPEST_TZ).date().isoformat()
+                events_cache = cache.get(date_str, "therundown_events")
+                if events_cache is None or force_refresh:
+                    events_cache = []
+                    for sport_id in _therundown_sport_ids():
+                        try:
+                            events_cache.extend(td_client.events_for_date(sport_id, date_str))
+                        except Exception as exc:
+                            td_logger.warning("TheRundown events fetch failed: %s", exc)
+                    cache.set(date_str, "therundown_events", events_cache)
+                therundown_events = list(events_cache or [])
+                for event in therundown_events:
+                    teams = td_client.event_teams(event)
+                    if not teams:
+                        continue
+                    event_date = td_client.iso_date(
+                        str(
+                            event.get("event_date")
+                            or event.get("event_date_utc")
+                            or event.get("date_event")
+                            or event.get("date")
+                            or ""
+                        ),
+                        date_str,
+                    )
+                    key = _therundown_event_key(event_date, teams[0], teams[1])
+                    therundown_map[key] = {
+                        "home": teams[0],
+                        "away": teams[1],
+                        "line_id": td_client.event_line_id(event),
+                        "markets": td_client.markets_from_event(event),
+                    }
+                cache.set(date_str, "therundown_event_map", therundown_map)
+                use_therundown = bool(therundown_map)
+
+            if use_therundown:
+                fixtures, standings_by_comp = _fetch_public_fixtures(competitions, window_hours)
+                eligible = []
+                for match in fixtures:
+                    home_team = match.get("home_team", "")
+                    away_team = match.get("away_team", "")
+                    if not home_team or not away_team:
+                        continue
+                    match_dt = _parse_match_dt(match)
+                    if not match_dt:
+                        continue
+                    match_date = match_dt.astimezone(BUDAPEST_TZ).date().isoformat()
+                    key = _therundown_event_key(match_date, home_team, away_team)
+                    therundown_event = therundown_map.get(key)
+                    if not therundown_event:
+                        continue
+                    bookmakers = _therundown_markets_to_bookmakers(
+                        therundown_event.get("markets") or {}, home_team, away_team
+                    )
+                    if bookmakers:
+                        match["bookmakers"] = bookmakers
+                    match["therundown_line_id"] = therundown_event.get("line_id")
+                    eligible.append(match)
+                odds_count = len(eligible)
+                if not eligible:
+                    odds_error = "Nincs elerheto oddsos meccs (TheRundown)"
+            elif not config.odds_api_key:
                 odds_error = "Odds API kulcs hianyzik (odds nelkuli ajanlas)"
                 data = []
                 eligible = []
@@ -6315,6 +6484,34 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                     target_source = filtered_picks if filtered_picks else picks
                     target_matches = _select_picks_near_odds(target_source, target_odds, limit=2)
                     target_matches = [_enrich_pick(item) for item in target_matches]
+                    if use_therundown:
+                        picks_to_update = []
+                        if best_pick:
+                            picks_to_update.append(best_pick)
+                        if target_matches:
+                            picks_to_update.extend(target_matches)
+                        for pick in picks_to_update:
+                            if not pick:
+                                continue
+                            home_norm = _normalize_team_name(pick.get("home_team", ""))
+                            away_norm = _normalize_team_name(pick.get("away_team", ""))
+                            match = next(
+                                (
+                                    item
+                                    for item in eligible
+                                    if _normalize_team_name(item.get("home_team", "")) == home_norm
+                                    and _normalize_team_name(item.get("away_team", "")) == away_norm
+                                ),
+                                None,
+                            )
+                            if not match:
+                                continue
+                            line_id = match.get("therundown_line_id")
+                            if line_id:
+                                _therundown_update_match_odds(match, str(line_id), td_client)
+                                markets = _build_odds_markets_from_match(match)
+                                if markets:
+                                    pick["odds"] = _odds_for_pick(pick.get("market_key", ""), pick.get("outcome", ""), markets)
                 if best_combo and best_combo.get("matches"):
                     best_combo["matches"] = [_enrich_pick(item) for item in best_combo["matches"]]
             post_month, _ = _api_usage_counts()
@@ -6388,6 +6585,15 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
             "configured": bool(config.odds_api_key),
             "status": "ok" if config.odds_api_key else "bad",
             "label": "Beallitva" if config.odds_api_key else "Hianyzik",
+        },
+        {
+            "key": "therundown",
+            "icon": "RD",
+            "name": "TheRundown",
+            "meta": "RapidAPI odds",
+            "configured": _therundown_enabled(),
+            "status": "ok" if _therundown_enabled() else "bad",
+            "label": "Beallitva" if _therundown_enabled() else "Hianyzik",
         },
         {
             "key": "football_data",
