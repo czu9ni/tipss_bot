@@ -472,12 +472,14 @@ _TEAM_ID_CACHE: dict[str, dict[str, object]] = {}
 _FIXTURE_STATS_CACHE: dict[str, dict[str, object]] = {}
 _TEAM_SQUAD_CACHE: dict[str, dict[str, object]] = {}
 _SR_STANDINGS_CACHE: dict[str, dict[str, object]] = {}
+_SR_STATS_CACHE: dict[str, dict[str, object]] = {}
 _ODDS_MARKETS_DEFAULT = "h2h,totals,btts,team_totals,spreads,draw_no_bet,double_chance,alternate_totals,alternate_team_totals,alternate_spreads"
 BACKGROUND_REFRESH_SECONDS = int(os.environ.get("BACKGROUND_REFRESH_SECONDS", "600"))
 OFFLINE_FIXTURES_TTL_SECONDS = int(os.environ.get("OFFLINE_FIXTURES_TTL_SECONDS", "3600"))
 TEAM_SQUAD_TTL_SECONDS = int(os.environ.get("TEAM_SQUAD_TTL_SECONDS", "2592000"))
 TEAM_SQUAD_MAX_FETCH_PER_MONTH = int(os.environ.get("TEAM_SQUAD_MAX_FETCH_PER_MONTH", "30"))
 SR_STANDINGS_TTL_SECONDS = int(os.environ.get("SR_STANDINGS_TTL_SECONDS", "3600"))
+SR_STATS_TTL_SECONDS = int(os.environ.get("SR_STATS_TTL_SECONDS", "21600"))
 
 _RESPONSE_CACHE: dict[str, object] = {"html": "", "ts": 0.0}
 _RESPONSE_LOCK = threading.Lock()
@@ -1878,6 +1880,16 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
     if table_entry is None and season_hint:
         standings = _fetch_standings_sportradar(season_hint)
         table_entry = _standings_highlight(standings, team_name, team_id if isinstance(team_id, str) else None)
+    if season_hint and isinstance(team_id, str) and team_id.startswith("sr:competitor:"):
+        stats = _fetch_competitor_stats_sportradar(season_hint, team_id)
+        matches_played = stats.get("matches_played")
+        corners = stats.get("corner_kicks")
+        cards = stats.get("cards_given")
+        if isinstance(matches_played, (int, float)) and matches_played > 0:
+            if corners is not None:
+                corners_avg = float(corners) / float(matches_played)
+            if cards is not None:
+                cards_avg = float(cards) / float(matches_played)
     if team_id_fd is None and team_id is not None and comp_hint:
         team_id_fd = team_id
     if league_code:
@@ -1955,14 +1967,21 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
         _cache_set(_TEAM_SUMMARY_CACHE, cache_key, result)
         return result
     recent = _calc_recent_rates(matches)
+    season_win_rate = None
+    season_goals_for_avg = None
+    if table_entry and table_entry.get("played"):
+        played = float(table_entry.get("played") or 0)
+        wins = float(table_entry.get("won") or 0)
+        goals_for = float(table_entry.get("goals_for") or 0)
+        if played > 0:
+            season_win_rate = wins / played
+            season_goals_for_avg = goals_for / played
     total = len(matches)
     wins = sum(1 for row in matches if row.get("result") == "W")
     goals_for = sum(row.get("gf", 0) for row in matches)
     btts_hits = sum(1 for row in matches if row.get("gf", 0) > 0 and row.get("ga", 0) > 0)
     over25_hits = sum(1 for row in matches if (row.get("gf", 0) + row.get("ga", 0)) >= 3)
-    corners_avg = None
-    cards_avg = None
-    if matches and config.api_football_key and AF_STATS_ENABLED:
+    if matches and config.api_football_key and AF_STATS_ENABLED and (corners_avg is None or cards_avg is None):
         corners_values = []
         cards_values = []
         for row in matches:
@@ -2003,12 +2022,12 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
         table_entry = table_data.get(team_norm)
     result = {
         "team": team_name,
-        "win_rate": wins / total,
-        "goals_for_avg": goals_for / total,
+        "win_rate": season_win_rate if season_win_rate is not None else wins / total,
+        "goals_for_avg": season_goals_for_avg if season_goals_for_avg is not None else goals_for / total,
         "btts_rate": btts_hits / total,
         "over25_rate": over25_hits / total,
-        "season_win_rate": None,
-        "season_goals_for_avg": None,
+        "season_win_rate": season_win_rate,
+        "season_goals_for_avg": season_goals_for_avg,
         "season_btts_rate": None,
         "season_over25_rate": None,
         "recent_win_rate": recent["win_rate"] if recent else None,
@@ -3606,12 +3625,26 @@ def _extract_sr_standings(payload: dict) -> list[dict]:
                     continue
                 points = row.get("points")
                 rank = row.get("rank") or row.get("position")
+                played = row.get("played")
+                wins = row.get("win")
+                draws = row.get("draw")
+                losses = row.get("loss")
+                goals_for = row.get("goals_for")
+                goals_against = row.get("goals_against")
+                ppg = row.get("points_per_game")
                 rows.append(
                     {
                         "team": name,
                         "team_id": team_id,
                         "points": int(points) if isinstance(points, (int, float)) else None,
                         "position": int(rank) if isinstance(rank, (int, float)) else None,
+                        "played": int(played) if isinstance(played, (int, float)) else None,
+                        "won": int(wins) if isinstance(wins, (int, float)) else None,
+                        "draw": int(draws) if isinstance(draws, (int, float)) else None,
+                        "lost": int(losses) if isinstance(losses, (int, float)) else None,
+                        "goals_for": int(goals_for) if isinstance(goals_for, (int, float)) else None,
+                        "goals_against": int(goals_against) if isinstance(goals_against, (int, float)) else None,
+                        "points_per_game": float(ppg) if isinstance(ppg, (int, float)) else None,
                     }
                 )
     return rows
@@ -3640,6 +3673,33 @@ def _fetch_standings_sportradar(season_id: str) -> list[dict]:
         return rows
     except Exception:
         return []
+
+
+def _fetch_competitor_stats_sportradar(season_id: str, competitor_id: str) -> dict:
+    if not season_id or not competitor_id:
+        return {}
+    if _backoff_active("sportradar"):
+        return {}
+    cache_key = f"sr:stats:{season_id}:{competitor_id}"
+    cached = _cache_get(_SR_STATS_CACHE, cache_key, SR_STATS_TTL_SECONDS)
+    if isinstance(cached, dict):
+        return cached
+    base_url = (config.sportradar_api_base or "https://api.sportradar.com/soccer/trial/v4/en").rstrip("/")
+    url = f"{base_url}/seasons/{season_id}/competitors/{competitor_id}/statistics.json"
+    try:
+        response = _http_get(url, headers={"x-api-key": config.sportradar_api_key, "accept": "application/json"}, timeout=12)
+        if response.status_code != 200:
+            if response.status_code == 429:
+                _note_backoff("sportradar")
+            return {}
+        data = response.json()
+        stats = data.get("competitor", {}).get("statistics", {}) if isinstance(data, dict) else {}
+        if not isinstance(stats, dict):
+            stats = {}
+        _cache_set(_SR_STATS_CACHE, cache_key, stats)
+        return stats
+    except Exception:
+        return {}
 
 
 def _team_recent_matches_sportradar(competitor_id: str, limit: int = 5) -> list[dict]:
