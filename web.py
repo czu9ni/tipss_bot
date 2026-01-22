@@ -156,6 +156,41 @@ def _therundown_markets_to_bookmakers(markets: dict[str, dict], home: str, away:
     return []
 
 
+def _token_set(name: str) -> set[str]:
+    return {tok for tok in _normalize_team_name(name).split(" ") if tok}
+
+
+def _similarity(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    union = len(a | b)
+    return inter / union if union else 0.0
+
+
+def _find_therundown_event(
+    date_str: str, home: str, away: str, candidates: list[dict], threshold: float = 0.55
+) -> dict:
+    home_tokens = _token_set(home)
+    away_tokens = _token_set(away)
+    best = None
+    best_score = 0.0
+    for item in candidates:
+        if item.get("date") != date_str:
+            continue
+        cand_home = item.get("home_tokens", set())
+        cand_away = item.get("away_tokens", set())
+        score_same = (_similarity(home_tokens, cand_home) + _similarity(away_tokens, cand_away)) / 2.0
+        score_swap = (_similarity(home_tokens, cand_away) + _similarity(away_tokens, cand_home)) / 2.0
+        score = max(score_same, score_swap)
+        if score > best_score:
+            best_score = score
+            best = item
+    if best and best_score >= threshold:
+        return best
+    return {}
+
+
 def _therundown_update_match_odds(match: dict, line_id: str, client: TheRundownClient) -> None:
     if not line_id:
         return
@@ -6194,6 +6229,7 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
     odds_data = None
     therundown_map: dict[str, dict] = {}
     therundown_events: list[dict] = []
+    therundown_candidates: list[dict] = []
     target_matches = []
     rss_items: list[dict] = []
     news_blocks: list[dict] = []
@@ -6249,6 +6285,10 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                     therundown_map[_therundown_event_key(event_date, teams[0], teams[1])] = payload
                     if event_date != date_str:
                         therundown_map[_therundown_event_key(date_str, teams[0], teams[1])] = payload
+                    payload["date"] = event_date
+                    payload["home_tokens"] = _token_set(teams[0])
+                    payload["away_tokens"] = _token_set(teams[1])
+                    therundown_candidates.append(payload)
                 cache.set(date_str, "therundown_event_map", therundown_map)
                 use_therundown = bool(therundown_map)
 
@@ -6267,7 +6307,13 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                     key = _therundown_event_key(match_date, home_team, away_team)
                     therundown_event = therundown_map.get(key)
                     if not therundown_event:
-                        continue
+                        therundown_event = _find_therundown_event(
+                            match_date, home_team, away_team, therundown_candidates
+                        )
+                        if therundown_event:
+                            therundown_map[key] = therundown_event
+                        else:
+                            continue
                     bookmakers = _therundown_markets_to_bookmakers(
                         therundown_event.get("markets") or {}, home_team, away_team
                     )

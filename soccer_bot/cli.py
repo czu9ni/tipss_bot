@@ -248,6 +248,41 @@ def _event_key(date_str: str, home: str, away: str) -> str:
     return f"{date_str}|{normalize_team_name(home)}|{normalize_team_name(away)}"
 
 
+def _token_set(name: str) -> set[str]:
+    return {tok for tok in normalize_team_name(name).split(" ") if tok}
+
+
+def _similarity(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    union = len(a | b)
+    return inter / union if union else 0.0
+
+
+def _find_therundown_event(
+    date_str: str, home: str, away: str, candidates: list[dict], threshold: float = 0.55
+) -> dict:
+    home_tokens = _token_set(home)
+    away_tokens = _token_set(away)
+    best = None
+    best_score = 0.0
+    for item in candidates:
+        if item.get("date") != date_str:
+            continue
+        cand_home = item.get("home_tokens", set())
+        cand_away = item.get("away_tokens", set())
+        score_same = (_similarity(home_tokens, cand_home) + _similarity(away_tokens, cand_away)) / 2.0
+        score_swap = (_similarity(home_tokens, cand_away) + _similarity(away_tokens, cand_home)) / 2.0
+        score = max(score_same, score_swap)
+        if score > best_score:
+            best_score = score
+            best = item
+    if best and best_score >= threshold:
+        return best
+    return {}
+
+
 def _load_cached(cache: DiskCache, date_str: str, name: str, no_cache: bool) -> Any | None:
     if no_cache:
         return None
@@ -282,6 +317,7 @@ def _fetch_data(date_str: str, cache: DiskCache, no_cache: bool, client) -> dict
         fixtures = _deserialize_fixtures(fixtures_raw)
 
     therundown_map: dict[str, dict] = {}
+    therundown_candidates: list[dict] = []
     therundown_events: list[dict] = []
     if _therundown_enabled():
         td_client = _therundown_client(client)
@@ -326,6 +362,9 @@ def _fetch_data(date_str: str, cache: DiskCache, no_cache: bool, client) -> dict
             therundown_map[_event_key(event_date, home, away)] = payload
             if event_date != date_str:
                 therundown_map[_event_key(date_str, home, away)] = payload
+            payload["home_tokens"] = _token_set(home)
+            payload["away_tokens"] = _token_set(away)
+            therundown_candidates.append(payload)
         cache.set(date_str, "therundown_event_map", therundown_map)
 
         if no_cache:
@@ -344,7 +383,11 @@ def _fetch_data(date_str: str, cache: DiskCache, no_cache: bool, client) -> dict
             for fixture in fixtures:
                 fixture_date = _iso_date(fixture.commence_time, date_str)
                 key = _event_key(fixture_date, fixture.home_team, fixture.away_team)
-                if key in therundown_map:
+                match = therundown_map.get(key)
+                if not match:
+                    match = _find_therundown_event(fixture_date, fixture.home_team, fixture.away_team, therundown_candidates)
+                if match:
+                    therundown_map[key] = match
                     filtered.append(fixture)
             if filtered:
                 fixtures = filtered
