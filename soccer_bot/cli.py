@@ -115,9 +115,9 @@ def _therundown_client(client) -> TheRundownClient:
 
 
 def _therundown_sport_ids() -> list[str]:
-    raw = _env("THERUNDOWN_SPORT_IDS", _env("THERUNDOWN_SPORT_ID_SOCCER", "16"))
+    raw = _env("THERUNDOWN_SPORT_IDS", _env("THERUNDOWN_SPORT_ID_SOCCER", "10,11,12,13,14,15,17"))
     parts = [item.strip() for item in raw.split(",") if item.strip()]
-    return parts or ["16"]
+    return parts or ["10", "11", "12", "13", "14", "15", "17"]
 
 
 def _iso_date(value: str | None, fallback: str) -> str:
@@ -362,8 +362,18 @@ def _fetch_data(date_str: str, cache: DiskCache, no_cache: bool, client) -> dict
             therundown_map[_event_key(event_date, home, away)] = payload
             if event_date != date_str:
                 therundown_map[_event_key(date_str, home, away)] = payload
-            payload["home_tokens"] = _token_set(home)
-            payload["away_tokens"] = _token_set(away)
+            home_tokens = set(_token_set(home))
+            away_tokens = set(_token_set(away))
+            for item in event.get("teams_normalized") or []:
+                name = str(item.get("name") or "")
+                if not name:
+                    continue
+                if item.get("is_home"):
+                    home_tokens |= _token_set(name)
+                if item.get("is_away"):
+                    away_tokens |= _token_set(name)
+            payload["home_tokens"] = home_tokens
+            payload["away_tokens"] = away_tokens
             therundown_candidates.append(payload)
         cache.set(date_str, "therundown_event_map", therundown_map)
 

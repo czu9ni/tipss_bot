@@ -79,7 +79,7 @@ def _cache_dir() -> str:
 def _therundown_sport_ids() -> list[str]:
     raw = os.environ.get("THERUNDOWN_SPORT_ID_SOCCER", "").strip()
     if not raw:
-        return ["16"]
+        return ["10", "11", "12", "13", "14", "15", "17"]
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
@@ -6276,18 +6276,30 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                         ),
                         date_str,
                     )
+                    home_name = teams[0]
+                    away_name = teams[1]
                     payload = {
-                        "home": teams[0],
-                        "away": teams[1],
+                        "home": home_name,
+                        "away": away_name,
                         "line_id": td_client.event_line_id(event),
                         "markets": td_client.markets_from_event(event),
                     }
-                    therundown_map[_therundown_event_key(event_date, teams[0], teams[1])] = payload
+                    therundown_map[_therundown_event_key(event_date, home_name, away_name)] = payload
                     if event_date != date_str:
-                        therundown_map[_therundown_event_key(date_str, teams[0], teams[1])] = payload
+                        therundown_map[_therundown_event_key(date_str, home_name, away_name)] = payload
                     payload["date"] = event_date
-                    payload["home_tokens"] = _token_set(teams[0])
-                    payload["away_tokens"] = _token_set(teams[1])
+                    home_tokens = set(_token_set(home_name))
+                    away_tokens = set(_token_set(away_name))
+                    for item in event.get("teams_normalized") or []:
+                        name = str(item.get("name") or "")
+                        if not name:
+                            continue
+                        if item.get("is_home"):
+                            home_tokens |= _token_set(name)
+                        if item.get("is_away"):
+                            away_tokens |= _token_set(name)
+                    payload["home_tokens"] = home_tokens
+                    payload["away_tokens"] = away_tokens
                     therundown_candidates.append(payload)
                 cache.set(date_str, "therundown_event_map", therundown_map)
                 use_therundown = bool(therundown_map)

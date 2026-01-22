@@ -53,15 +53,13 @@ class TheRundownClient:
         if not isinstance(value, (int, float)):
             return None
         val = float(value)
-        if val == 0:
+        if val == 0 or abs(val) < 10:
             return None
         if abs(val) >= 100:
             if val > 0:
                 return round((val / 100.0) + 1.0, 3)
             return round((100.0 / abs(val)) + 1.0, 3)
-        if val > 1:
-            return round(val, 3)
-        return 1.01
+        return None
 
     @classmethod
     def event_key(cls, date_str: str, home: str, away: str) -> str:
