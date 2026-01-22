@@ -92,14 +92,24 @@ def _therundown_markets_to_bookmakers(markets: dict[str, dict], home: str, away:
         return []
     bookmaker = {"key": "therundown", "title": "TheRundown", "markets": []}
     h2h = markets.get("1x2") or {}
+    dc_markets: dict[str, float] = {}
     if h2h:
         outcomes = []
-        if isinstance(h2h.get("home"), (int, float)):
-            outcomes.append({"name": home, "price": float(h2h["home"])})
-        if isinstance(h2h.get("draw"), (int, float)):
-            outcomes.append({"name": "Draw", "price": float(h2h["draw"])})
-        if isinstance(h2h.get("away"), (int, float)):
-            outcomes.append({"name": away, "price": float(h2h["away"])})
+        home_odds = float(h2h["home"]) if isinstance(h2h.get("home"), (int, float)) else None
+        draw_odds = float(h2h["draw"]) if isinstance(h2h.get("draw"), (int, float)) else None
+        away_odds = float(h2h["away"]) if isinstance(h2h.get("away"), (int, float)) else None
+        if home_odds:
+            outcomes.append({"name": home, "price": home_odds})
+        if draw_odds:
+            outcomes.append({"name": "Draw", "price": draw_odds})
+        if away_odds:
+            outcomes.append({"name": away, "price": away_odds})
+        if home_odds and draw_odds:
+            dc_markets["1x"] = round(1 / ((1 / home_odds) + (1 / draw_odds)), 2)
+        if away_odds and draw_odds:
+            dc_markets["x2"] = round(1 / ((1 / away_odds) + (1 / draw_odds)), 2)
+        if home_odds and away_odds:
+            dc_markets["12"] = round(1 / ((1 / home_odds) + (1 / away_odds)), 2)
         if outcomes:
             bookmaker["markets"].append({"key": "h2h", "outcomes": outcomes})
     totals = markets.get("over_under") or {}
@@ -129,6 +139,16 @@ def _therundown_markets_to_bookmakers(markets: dict[str, dict], home: str, away:
             outcomes.append({"name": "X2", "price": float(dc["x2"])})
         if isinstance(dc.get("12"), (int, float)):
             outcomes.append({"name": "12", "price": float(dc["12"])})
+        if outcomes:
+            bookmaker["markets"].append({"key": "double_chance", "outcomes": outcomes})
+    elif dc_markets:
+        outcomes = []
+        if isinstance(dc_markets.get("1x"), (int, float)):
+            outcomes.append({"name": "1X", "price": float(dc_markets["1x"])})
+        if isinstance(dc_markets.get("x2"), (int, float)):
+            outcomes.append({"name": "X2", "price": float(dc_markets["x2"])})
+        if isinstance(dc_markets.get("12"), (int, float)):
+            outcomes.append({"name": "12", "price": float(dc_markets["12"])})
         if outcomes:
             bookmaker["markets"].append({"key": "double_chance", "outcomes": outcomes})
     if bookmaker["markets"]:
@@ -3281,6 +3301,7 @@ def _build_picks_for_match(
     for pick in picks_v2:
         market_key = _market_key_from_pick(pick.market)
         odds = _odds_for_pick(market_key, pick.outcome, odds_markets)
+        odds_value = float(odds) if isinstance(odds, (int, float)) else 0.0
         picks.append(
             {
                 "match_key": _match_key(match),
@@ -3291,8 +3312,8 @@ def _build_picks_for_match(
                 "market_label": _market_label(market_key),
                 "outcome": pick.outcome,
                 "line": None,
-                "odds": odds,
-                "distance": abs(float(odds or 0.0) - target) if odds else 0.0,
+                "odds": odds_value,
+                "distance": abs(odds_value - target),
                 "score": pick.score,
                 "risk": _risk_label(pick.score),
                 "explain_hu": pick.explanation_hu,
@@ -6251,7 +6272,13 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                         match["bookmakers"] = bookmakers
                     match["therundown_line_id"] = therundown_event.get("line_id")
                     eligible.append(match)
-                odds_count = len(eligible)
+                for match in eligible:
+                    if match.get("bookmakers"):
+                        continue
+                    line_id = match.get("therundown_line_id")
+                    if line_id:
+                        _therundown_update_match_odds(match, str(line_id), td_client)
+                odds_count = sum(1 for match in eligible if _build_odds_markets_from_match(match))
                 if not eligible:
                     odds_error = "Nincs elerheto oddsos meccs (TheRundown)"
             elif not config.odds_api_key:
