@@ -6187,20 +6187,10 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
     cached = _load_cached_picks(db)
     market_roi = _market_roi_map(db)
     cached_updated_at = cached.get("updated_at") if cached else None
-    bypass_cooldown = False
     if cached and cached_updated_at:
         cached_dt = _parse_iso_datetime(cached_updated_at)
         if cached_dt and not _same_local_day(cached_dt, BUDAPEST_TZ):
             refresh_requested = True
-            bypass_cooldown = True
-        if _therundown_enabled():
-            picks_check = cached.get("target_matches") or []
-            if not picks_check and cached.get("best_pick"):
-                picks_check = [cached.get("best_pick")]
-            missing_odds = any((p.get("odds") in (None, 0, "-", "n/a")) for p in picks_check if p)
-            if missing_odds:
-                refresh_requested = True
-                bypass_cooldown = True
     if not refresh_requested:
         if not cached:
             refresh_requested = True
@@ -6210,19 +6200,15 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                 age = (datetime.now(timezone.utc) - cached_dt).total_seconds()
                 if age >= AUTO_REFRESH_SECONDS:
                     refresh_requested = True
-                if cached_dt < _SERVER_STARTED_AT:
-                    refresh_requested = True
         elif cached_updated_at:
             cached_dt = _parse_iso_datetime(cached_updated_at)
-            if cached_dt and cached_dt < _SERVER_STARTED_AT:
-                refresh_requested = True
-    if refresh_requested and not force_refresh and cached_updated_at and REFRESH_COOLDOWN_SECONDS > 0 and not bypass_cooldown:
+    if refresh_requested and not force_refresh and cached_updated_at and REFRESH_COOLDOWN_SECONDS > 0:
         cached_dt = _parse_iso_datetime(cached_updated_at)
         if cached_dt:
             age = (datetime.now(timezone.utc) - cached_dt).total_seconds()
             if age < REFRESH_COOLDOWN_SECONDS:
                 refresh_requested = False
-    if refresh_requested and not force_refresh and cached_updated_at and MIN_API_REFRESH_SECONDS > 0 and not bypass_cooldown:
+    if refresh_requested and not force_refresh and cached_updated_at and MIN_API_REFRESH_SECONDS > 0:
         cached_dt = _parse_iso_datetime(cached_updated_at)
         if cached_dt:
             age = (datetime.now(timezone.utc) - cached_dt).total_seconds()
