@@ -6201,6 +6201,7 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
     odds_error = None
     best_pick = None
     best_combo = None
+    skip_tip_enforce = False
     refresh_usage: dict[str, int] = {}
     diag_counts = {"comp_24": 0, "all_24": 0, "api_football_24": 0, "window_from": "", "window_to": "", "window_source": "system"}
 
@@ -6285,6 +6286,7 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                 odds_count = sum(1 for match in eligible if match.get("therundown_markets") or _build_odds_markets_from_match(match))
                 if not eligible:
                     odds_error = "Nincs elerheto oddsos meccs (TheRundown)"
+                    skip_tip_enforce = True
             elif not config.odds_api_key:
                 odds_error = "Odds API kulcs hianyzik (odds nelkuli ajanlas)"
                 data = []
@@ -6576,7 +6578,8 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
             print("[ERROR] refresh failed")
             print(traceback.format_exc())
         finally:
-            best_pick, target_matches = _enforce_tip_presence(best_pick, target_matches)
+            if not skip_tip_enforce:
+                best_pick, target_matches = _enforce_tip_presence(best_pick, target_matches)
         _settle_saved_picks(db, config.odds_api_key)
     else:
         if cached:
