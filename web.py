@@ -6240,13 +6240,15 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                         ),
                         date_str,
                     )
-                    key = _therundown_event_key(event_date, teams[0], teams[1])
-                    therundown_map[key] = {
+                    payload = {
                         "home": teams[0],
                         "away": teams[1],
                         "line_id": td_client.event_line_id(event),
                         "markets": td_client.markets_from_event(event),
                     }
+                    therundown_map[_therundown_event_key(event_date, teams[0], teams[1])] = payload
+                    if event_date != date_str:
+                        therundown_map[_therundown_event_key(date_str, teams[0], teams[1])] = payload
                 cache.set(date_str, "therundown_event_map", therundown_map)
                 use_therundown = bool(therundown_map)
 

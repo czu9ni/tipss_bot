@@ -315,8 +315,7 @@ def _fetch_data(date_str: str, cache: DiskCache, no_cache: bool, client) -> dict
             line_id = _event_line_id(event)
             if not line_id:
                 continue
-            key = _event_key(event_date, home, away)
-            therundown_map[key] = {
+            payload = {
                 "event_id": event.get("event_id"),
                 "line_id": line_id,
                 "home": home,
@@ -324,6 +323,9 @@ def _fetch_data(date_str: str, cache: DiskCache, no_cache: bool, client) -> dict
                 "date": event_date,
                 "markets": _markets_from_event(event),
             }
+            therundown_map[_event_key(event_date, home, away)] = payload
+            if event_date != date_str:
+                therundown_map[_event_key(date_str, home, away)] = payload
         cache.set(date_str, "therundown_event_map", therundown_map)
 
         if no_cache:
@@ -429,12 +431,10 @@ def _pick_best(
 
     pre_scored: list[tuple[Pick, Fixture]] = []
     for fixture in fixtures_limited:
-        if not fixture.competition_id or not fixture.season:
-            continue
-        comp_rows = fetch_standings(fixture.competition_id, fixture.season)
-        if not comp_rows:
-            continue
-        standings_idx = _standing_index(comp_rows)
+        standings_idx: dict[str, dict] = {}
+        if fixture.competition_id and fixture.season:
+            comp_rows = fetch_standings(fixture.competition_id, fixture.season)
+            standings_idx = _standing_index(comp_rows) if comp_rows else {}
         fixture_date = _iso_date(fixture.commence_time, date_str)
         event_key = _event_key(fixture_date, fixture.home_team, fixture.away_team)
         therundown_event = therundown_map.get(event_key, {})
@@ -454,7 +454,7 @@ def _pick_best(
         pre_scored.append((best, fixture))
 
     if not pre_scored:
-        raise RuntimeError("No fixtures with standings available.")
+        raise RuntimeError("No fixtures available.")
 
     pre_scored.sort(key=lambda item: (-item[0].score, item[1].id))
     top_two = [item[1] for item in pre_scored[:2]]
