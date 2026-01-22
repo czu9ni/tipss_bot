@@ -6187,21 +6187,8 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
     cached = _load_cached_picks(db)
     market_roi = _market_roi_map(db)
     cached_updated_at = cached.get("updated_at") if cached else None
-    if cached and cached_updated_at:
-        cached_dt = _parse_iso_datetime(cached_updated_at)
-        if cached_dt and not _same_local_day(cached_dt, BUDAPEST_TZ):
-            refresh_requested = True
-    if not refresh_requested:
-        if not cached:
-            refresh_requested = True
-        elif AUTO_REFRESH_SECONDS > 0 and cached_updated_at:
-            cached_dt = _parse_iso_datetime(cached_updated_at)
-            if cached_dt:
-                age = (datetime.now(timezone.utc) - cached_dt).total_seconds()
-                if age >= AUTO_REFRESH_SECONDS:
-                    refresh_requested = True
-        elif cached_updated_at:
-            cached_dt = _parse_iso_datetime(cached_updated_at)
+    if not refresh_requested and not cached:
+        refresh_requested = True
     if refresh_requested and not force_refresh and cached_updated_at and REFRESH_COOLDOWN_SECONDS > 0:
         cached_dt = _parse_iso_datetime(cached_updated_at)
         if cached_dt:
