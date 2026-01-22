@@ -523,14 +523,10 @@
       </section>
       <section class="card span2">
         <div class="card-head">
-          {% if target_matches and target_matches[0].odds is none %}
-          <h2 class="card-title">Ket legeselyesebb meccs{% if odds_count %} (oddsos){% else %} (odds nelkul){% endif %}</h2>
-          {% else %}
-          <h2 class="card-title">Ket meccs 2.00 koruli oddssal</h2>
-          {% endif %}
+          <h2 class="card-title">Ket legeselyesebb meccs (oddsos)</h2>
         </div>
         <div class="card-body">
-          {% if target_matches %}
+          {% if target_matches_odds %}
           <table>
             <thead>
               <tr>
@@ -544,7 +540,7 @@
               </tr>
             </thead>
             <tbody>
-              {% for pick in target_matches %}
+              {% for pick in target_matches_odds %}
               <tr>
                 <td>{{ pick.home_team }} vs {{ pick.away_team }}</td>
                 <td>{{ pick.competition if pick.competition else "-" }}</td>
@@ -558,7 +554,45 @@
             </tbody>
           </table>
           {% else %}
-          <div class="muted">Nincs meccs a szurokben.</div>
+          <div class="muted">Nincs oddsos meccs a szurokben.</div>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="card span2">
+        <div class="card-head">
+          <h2 class="card-title">Ket legeselyesebb meccs (odds nelkul)</h2>
+        </div>
+        <div class="card-body">
+          {% if target_matches_no_odds %}
+          <table>
+            <thead>
+              <tr>
+                <th>Meccs</th>
+                <th>Bajnoksag</th>
+                <th>Piac</th>
+                <th>Kimenetel</th>
+                <th>Odds</th>
+                <th>Pont</th>
+                <th>Indok</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for pick in target_matches_no_odds %}
+              <tr>
+                <td>{{ pick.home_team }} vs {{ pick.away_team }}</td>
+                <td>{{ pick.competition if pick.competition else "-" }}</td>
+                <td>{{ pick.market_label }}</td>
+                <td>{{ pick.outcome }}</td>
+                <td><strong>{{ "%.2f"|format(pick.odds) if pick.odds and pick.odds > 1.01 else "-" }}</strong></td>
+                <td>{{ "%.2f"|format(pick.score) }}</td>
+                <td>{{ ", ".join(_match_reasons(pick)) }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+          <div class="muted">Nincs odds nelkuli meccs a szurokben.</div>
           {% endif %}
         </div>
       </section>

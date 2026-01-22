@@ -6201,7 +6201,6 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
     odds_error = None
     best_pick = None
     best_combo = None
-    skip_tip_enforce = False
     refresh_usage: dict[str, int] = {}
     diag_counts = {"comp_24": 0, "all_24": 0, "api_football_24": 0, "window_from": "", "window_to": "", "window_source": "system"}
 
@@ -6286,7 +6285,6 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                 odds_count = sum(1 for match in eligible if match.get("therundown_markets") or _build_odds_markets_from_match(match))
                 if not eligible:
                     odds_error = "Nincs elerheto oddsos meccs (TheRundown)"
-                    skip_tip_enforce = True
             elif not config.odds_api_key:
                 odds_error = "Odds API kulcs hianyzik (odds nelkuli ajanlas)"
                 data = []
@@ -6578,8 +6576,7 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
             print("[ERROR] refresh failed")
             print(traceback.format_exc())
         finally:
-            if not skip_tip_enforce:
-                best_pick, target_matches = _enforce_tip_presence(best_pick, target_matches)
+            best_pick, target_matches = _enforce_tip_presence(best_pick, target_matches)
         _settle_saved_picks(db, config.odds_api_key)
     else:
         if cached:
@@ -6715,6 +6712,8 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
         )
     api_total = len(api_items)
     api_online = sum(1 for item in api_items if item.get("status") in {"ok"})
+    target_matches_odds = [pick for pick in (target_matches or []) if (pick.get("odds") or 0) > 1.01]
+    target_matches_no_odds = [pick for pick in (target_matches or []) if (pick.get("odds") or 0) <= 1.01]
     context = {
         "odds_configured": bool(config.odds_api_key),
         "football_configured": bool(config.football_data_token),
@@ -6724,6 +6723,8 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
         "best_combo": best_combo,
         "odds_count": odds_count,
         "target_matches": target_matches,
+        "target_matches_odds": target_matches_odds,
+        "target_matches_no_odds": target_matches_no_odds,
         "recent_matches": recent_matches,
         "standings": standings,
         "_match_reasons": _match_reasons,
