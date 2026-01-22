@@ -176,6 +176,7 @@ def _therundown_update_match_odds(match: dict, line_id: str, client: TheRundownC
     except Exception:
         pass
     if markets:
+        match["therundown_markets"] = markets
         match["bookmakers"] = _therundown_markets_to_bookmakers(
             markets,
             match.get("home_team", ""),
@@ -3287,7 +3288,7 @@ def _build_picks_for_match(
         if team:
             standings_index[_normalize_team_name(team)] = row
 
-    odds_markets = _build_odds_markets_from_match(match)
+    odds_markets = match.get("therundown_markets") or _build_odds_markets_from_match(match)
     odds_payload = {"markets": odds_markets} if odds_markets else None
     picks_v2 = score_fixture(
         fixture_id=str(match.get("id") or ""),
@@ -6270,6 +6271,7 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                     )
                     if bookmakers:
                         match["bookmakers"] = bookmakers
+                    match["therundown_markets"] = therundown_event.get("markets") or {}
                     match["therundown_line_id"] = therundown_event.get("line_id")
                     eligible.append(match)
                 for match in eligible:
@@ -6278,7 +6280,7 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                     line_id = match.get("therundown_line_id")
                     if line_id:
                         _therundown_update_match_odds(match, str(line_id), td_client)
-                odds_count = sum(1 for match in eligible if _build_odds_markets_from_match(match))
+                odds_count = sum(1 for match in eligible if match.get("therundown_markets") or _build_odds_markets_from_match(match))
                 if not eligible:
                     odds_error = "Nincs elerheto oddsos meccs (TheRundown)"
             elif not config.odds_api_key:
