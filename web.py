@@ -6229,6 +6229,7 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
     best_pick = None
     best_combo = None
     refresh_usage: dict[str, int] = {}
+    odds_pool_matches: list[dict] = []
     diag_counts = {"comp_24": 0, "all_24": 0, "api_football_24": 0, "window_from": "", "window_to": "", "window_source": "system"}
 
     if refresh_requested:
@@ -6332,6 +6333,15 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                     if line_id:
                         _therundown_update_match_odds(match, str(line_id), td_client)
                 odds_count = sum(1 for match in eligible if match.get("therundown_markets") or _build_odds_markets_from_match(match))
+                odds_pool_matches = [
+                    {
+                        "home_team": match.get("home_team"),
+                        "away_team": match.get("away_team"),
+                        "competition": _match_competition(match),
+                        "commence_time": str(match.get("commence_time") or match.get("utc") or match.get("date") or ""),
+                    }
+                    for match in eligible[:8]
+                ]
                 if not eligible:
                     odds_error = "Nincs elerheto oddsos meccs (TheRundown)"
             elif not config.odds_api_key:
@@ -6473,6 +6483,16 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                         eligible = eligible_fallback[:]
             if eligible:
                 odds_count = len(eligible)
+                if not odds_pool_matches:
+                    odds_pool_matches = [
+                        {
+                            "home_team": match.get("home_team"),
+                            "away_team": match.get("away_team"),
+                            "competition": match.get("sport_title") or match.get("sport_key"),
+                            "commence_time": str(match.get("commence_time") or ""),
+                        }
+                        for match in eligible[:8]
+                    ]
                 if eligible:
                     rss_team_names = []
                     for item in eligible:
@@ -6608,6 +6628,7 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                     "target_matches": target_matches,
                     "odds_count": odds_count,
                     "odds_error": odds_error,
+                    "odds_pool_matches": odds_pool_matches,
                     "rss_sources": ", ".join(sorted({item.get("source", "") for item in rss_items if item.get("source")})),
                     "refresh_usage": refresh_usage,
                 },
@@ -6634,6 +6655,7 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
             raw_target_matches = cached.get("target_matches", [])
             odds_count = cached.get("odds_count", 0)
             odds_error = cached.get("odds_error")
+            odds_pool_matches = cached.get("odds_pool_matches", [])
             cached_updated_at = cached.get("updated_at")
             refresh_usage = cached.get("refresh_usage", {}) if cached else {}
             best_pick, target_matches = _enforce_tip_presence(cached.get("best_pick"), raw_target_matches)
@@ -6771,6 +6793,7 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
         "best_pick": best_pick,
         "best_combo": best_combo,
         "odds_count": odds_count,
+        "odds_pool_matches": odds_pool_matches,
         "target_matches": target_matches,
         "target_matches_odds": target_matches_odds,
         "target_matches_no_odds": target_matches_no_odds,

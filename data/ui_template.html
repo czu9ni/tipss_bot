@@ -339,6 +339,16 @@
           <span class="badge">Odds pool: <strong>{{ odds_count }}</strong> meccs</span>
         </div>
         <div class="hl-body">
+          {% if odds_pool_matches %}
+          <div class="small" style="margin-bottom:10px; color:rgba(255,255,255,.75)">
+            Odds pool meccsek:
+            {% for m in odds_pool_matches %}
+              <span class="chip" style="margin:4px 6px 0 0; display:inline-flex; align-items:center; gap:6px;">
+                {{ m.home_team }} vs {{ m.away_team }}
+              </span>
+            {% endfor %}
+          </div>
+          {% endif %}
           <div class="tip-grid">
             <div style="display:grid; gap:10px">
               {% if best_pick %}
