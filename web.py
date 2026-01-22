@@ -53,6 +53,23 @@ _load_dotenv()
 config = load_config()
 
 
+def _reload_env() -> None:
+    env_path = os.environ.get("SOCCER_ENV_PATH") or os.path.join(os.path.dirname(__file__), ".env")
+    if not os.path.exists(env_path):
+        return
+    try:
+        with open(env_path, "r", encoding="ascii") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                if key:
+                    os.environ[key] = value
+    except Exception:
+        pass
+
+
 def _backtest_mode_enabled() -> bool:
     return os.environ.get("BACKTEST_MODE", "0") == "1"
 
@@ -6161,6 +6178,7 @@ def api_dashboard():
 
 
 def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = True, force_refresh: bool = False):
+    _reload_env()
     target_odds = 2.0
     window_hours = 24
 
