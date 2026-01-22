@@ -3340,7 +3340,7 @@ def _build_picks_for_match(
         if team:
             standings_index[_normalize_team_name(team)] = row
 
-    odds_markets = match.get("therundown_markets") or _build_odds_markets_from_match(match)
+    odds_markets = match.get("odds_markets") or match.get("therundown_markets") or _build_odds_markets_from_match(match)
     odds_payload = {"markets": odds_markets} if odds_markets else None
     picks_v2 = score_fixture(
         fixture_id=str(match.get("id") or ""),
@@ -6299,6 +6299,7 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
             if use_therundown:
                 fixtures, standings_by_comp = _fetch_public_fixtures(competitions, window_hours)
                 eligible = []
+                eligible_with_odds = []
                 for match in fixtures:
                     home_team = match.get("home_team", "")
                     away_team = match.get("away_team", "")
@@ -6332,7 +6333,12 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                     line_id = match.get("therundown_line_id")
                     if line_id:
                         _therundown_update_match_odds(match, str(line_id), td_client)
-                odds_count = sum(1 for match in eligible if match.get("therundown_markets") or _build_odds_markets_from_match(match))
+                for match in eligible:
+                    markets = match.get("therundown_markets") or _build_odds_markets_from_match(match)
+                    match["odds_markets"] = markets
+                    if markets and markets.get("1x2"):
+                        eligible_with_odds.append(match)
+                odds_count = len(eligible_with_odds)
                 odds_pool_matches = [
                     {
                         "home_team": match.get("home_team"),
@@ -6340,8 +6346,10 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                         "competition": _match_competition(match),
                         "commence_time": str(match.get("commence_time") or match.get("utc") or match.get("date") or ""),
                     }
-                    for match in eligible[:8]
+                    for match in eligible_with_odds[:8]
                 ]
+                if eligible_with_odds:
+                    eligible = eligible_with_odds
                 if not eligible:
                     odds_error = "Nincs elerheto oddsos meccs (TheRundown)"
             elif not config.odds_api_key:
