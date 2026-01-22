@@ -6336,7 +6336,10 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                 for match in eligible:
                     markets = match.get("therundown_markets") or _build_odds_markets_from_match(match)
                     match["odds_markets"] = markets
-                    if markets and markets.get("1x2"):
+                    if markets and any(
+                        markets.get(key)
+                        for key in ("1x2", "over_under", "btts", "double_chance")
+                    ):
                         eligible_with_odds.append(match)
                 odds_count = len(eligible_with_odds)
                 odds_pool_matches = [
