@@ -3303,16 +3303,9 @@ def _build_story(pick: dict) -> str:
         sentences.append(
             f"A valasztott piac a legmagasabb valoszinusegu opcio volt: {selection} ({market_label})."
         )
-    model_prob = pick.get("model_prob")
-    implied_prob = pick.get("implied_prob")
+    model_prob = pick.get("score")
     if isinstance(model_prob, (int, float)):
-        if isinstance(implied_prob, (int, float)):
-            value = model_prob - implied_prob
-            sentences.append(
-                f"Modell esely: {model_prob:.0%}, odds alapjan: {implied_prob:.0%}, elteres: {value:+.0%}."
-            )
-        else:
-            sentences.append(f"Modell esely: {model_prob:.0%}.")
+        sentences.append(f"Modell esely: {model_prob:.0%}.")
     missing_parts = []
     if not home_standing and not away_standing:
         missing_parts.append("tabella")
@@ -6916,12 +6909,10 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
     api_total = len(api_items)
     api_online = sum(1 for item in api_items if item.get("status") in {"ok"})
     target_matches_odds = [pick for pick in (target_matches or []) if (pick.get("odds") or 0) > 1.01]
-    target_matches_no_odds = [pick for pick in (target_matches or []) if (pick.get("odds") or 0) <= 1.01]
-    if best_pick and (best_pick.get("odds") or 0) <= 1.01 and best_pick not in target_matches_no_odds:
-        target_matches_no_odds.insert(0, best_pick)
-    if len(target_matches_no_odds) < 2:
-        extra = [pick for pick in (target_matches or []) if pick not in target_matches_no_odds]
-        target_matches_no_odds.extend(extra[: 2 - len(target_matches_no_odds)])
+    if not target_matches_odds:
+        if target_matches and target_matches[0].get("odds") and target_matches[0].get("odds") > 1.01:
+            target_matches_odds = target_matches[:2]
+    target_matches_no_odds = target_matches[:2] if target_matches else []
     context = {
         "odds_configured": bool(config.odds_api_key),
         "football_configured": bool(config.football_data_token),
