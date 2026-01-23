@@ -6588,8 +6588,26 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                             "competition": match.get("sport_title") or match.get("sport_key"),
                             "commence_time": str(match.get("commence_time") or ""),
                         }
-                        for match in eligible[:8]
-                    ]
+                    for match in eligible[:8]
+                ]
+            # mindig toltsuk fel az odds nelkuli boxot, ha nincs oddsos match
+            if not target_matches and not eligible:
+                fallback_fixtures, standings_by_comp = _fetch_public_fixtures(competitions, window_hours)
+                if fallback_fixtures:
+                    rss_team_names = []
+                    for item in fallback_fixtures:
+                        home = item.get("home_team")
+                        away = item.get("away_team")
+                        if home:
+                            rss_team_names.append(str(home))
+                        if away:
+                            rss_team_names.append(str(away))
+                    rss_items = _fetch_rss_items(rss_team_names)
+                else:
+                    rss_items = []
+                fallback_picks = _build_stat_only_picks(fallback_fixtures, standings_by_comp, rss_items, market_roi)
+                if fallback_picks:
+                    best_pick, target_matches = _select_stat_picks(fallback_picks, limit=2)
                 if eligible:
                     rss_team_names = []
                     for item in eligible:
