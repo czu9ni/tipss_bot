@@ -6235,6 +6235,8 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
     standings = []
     if not FAST_MODE:
         competitions = _fetch_competitions_fd(config.football_data_token)
+    if not competitions:
+        competitions = [{"code": "n/a", "name": "n/a"}]
     allowed_codes = {str(comp.get("code") or "") for comp in competitions if comp.get("code")}
     primary = _primary_competition(competitions)
     if primary:
