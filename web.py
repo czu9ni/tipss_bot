@@ -100,6 +100,19 @@ def _therundown_sport_ids() -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def _therundown_sport_name(sport_id: str) -> str:
+    names = {
+        "10": "MLS",
+        "11": "Premier League",
+        "12": "Ligue 1",
+        "13": "Bundesliga",
+        "14": "LaLiga",
+        "15": "Serie A",
+        "17": "UEFA Europa/Champions",
+    }
+    return names.get(str(sport_id), f"Sport {sport_id}")
+
+
 def _therundown_event_key(date_str: str, home: str, away: str) -> str:
     return f"{date_str}|{_normalize_team_name(home)}|{_normalize_team_name(away)}"
 
@@ -6254,13 +6267,16 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                 td_logger = logging.getLogger("therundown_web")
                 td_client = _therundown_client()
                 cache = DiskCache(_cache_dir())
-                date_str = datetime.now(BUDAPEST_TZ).date().isoformat()
+                today = datetime.now(BUDAPEST_TZ).date()
+                date_str = today.isoformat()
+                date_str_next = (today + timedelta(days=1)).isoformat()
                 events_cache = cache.get(date_str, "therundown_events")
                 if events_cache is None or force_refresh:
                     events_cache = []
                     for sport_id in _therundown_sport_ids():
                         try:
                             events_cache.extend(td_client.events_for_date(sport_id, date_str))
+                            events_cache.extend(td_client.events_for_date(sport_id, date_str_next))
                         except Exception as exc:
                             td_logger.warning("TheRundown events fetch failed: %s", exc)
                     cache.set(date_str, "therundown_events", events_cache)
@@ -6270,6 +6286,7 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                     for sport_id in _therundown_sport_ids():
                         try:
                             events_cache.extend(td_client.events_for_date(sport_id, date_str))
+                            events_cache.extend(td_client.events_for_date(sport_id, date_str_next))
                         except Exception as exc:
                             td_logger.warning("TheRundown events fetch failed: %s", exc)
                     cache.set(date_str, "therundown_events", events_cache)
@@ -6375,6 +6392,53 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                     eligible = eligible_with_odds
                 if not eligible:
                     odds_error = "Nincs elerheto oddsos meccs (TheRundown)"
+                    fallback_matches = []
+                    for event in therundown_events:
+                        teams = td_client.event_teams(event)
+                        if not teams:
+                            continue
+                        line_id = td_client.event_line_id(event)
+                        if not line_id:
+                            continue
+                        event_date = td_client.iso_date(
+                            str(
+                                event.get("event_date")
+                                or event.get("event_date_utc")
+                                or event.get("date_event")
+                                or event.get("date")
+                                or ""
+                            ),
+                            date_str,
+                        )
+                        markets = td_client.markets_from_event(event)
+                        if not markets or not any(
+                            markets.get(key) for key in ("1x2", "over_under", "btts", "double_chance")
+                        ):
+                            continue
+                        home_team, away_team = teams
+                        fallback_matches.append(
+                            {
+                                "home_team": home_team,
+                                "away_team": away_team,
+                                "competition": {"name": _therundown_sport_name(str(event.get("sport_id") or ""))},
+                                "commence_time": event.get("event_date") or event.get("event_date_utc"),
+                                "therundown_markets": markets,
+                                "odds_markets": markets,
+                                "therundown_line_id": line_id,
+                            }
+                        )
+                    if fallback_matches:
+                        eligible = fallback_matches
+                        odds_count = len(fallback_matches)
+                        odds_pool_matches = [
+                            {
+                                "home_team": match.get("home_team"),
+                                "away_team": match.get("away_team"),
+                                "competition": _match_competition(match),
+                                "commence_time": str(match.get("commence_time") or ""),
+                            }
+                            for match in fallback_matches[:8]
+                        ]
             elif not config.odds_api_key:
                 odds_error = "Odds API kulcs hianyzik (odds nelkuli ajanlas)"
                 data = []
