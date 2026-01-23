@@ -213,9 +213,6 @@
         </div>
 
         <div class="top-actions">
-          <a class="btn" href="/?refresh=1" title="Kezi frissites (1 API kor)">
-            Frissites most
-          </a>
           <div class="pill" title="Rendszer allapot">
             {% if odds_error %}
               <span class="dot warn"></span> Odds hiba - <strong>Figyelmeztetes</strong>
@@ -232,7 +229,7 @@
           </div>
           {% endif %}
           <div class="pill" title="Automatikus frissites">
-            <span class="dot warn"></span> Auto frissites - <strong>kikapcsolva</strong>
+            <span class="dot good"></span> Auto frissites - <strong>{{ "aktiv" if refresh_requested else "varakozik" }}</strong>
           </div>
           <div class="pill" title="Hatekonysag">
             <span class="dot good"></span> Hatekonysag - <strong>{{ efficiency_score }}/10</strong>
