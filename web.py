@@ -6917,8 +6917,11 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
     api_online = sum(1 for item in api_items if item.get("status") in {"ok"})
     target_matches_odds = [pick for pick in (target_matches or []) if (pick.get("odds") or 0) > 1.01]
     target_matches_no_odds = [pick for pick in (target_matches or []) if (pick.get("odds") or 0) <= 1.01]
-    if not target_matches_no_odds and best_pick and (best_pick.get("odds") or 0) <= 1.01:
-        target_matches_no_odds = [best_pick]
+    if best_pick and (best_pick.get("odds") or 0) <= 1.01 and best_pick not in target_matches_no_odds:
+        target_matches_no_odds.insert(0, best_pick)
+    if len(target_matches_no_odds) < 2:
+        extra = [pick for pick in (target_matches or []) if pick not in target_matches_no_odds]
+        target_matches_no_odds.extend(extra[: 2 - len(target_matches_no_odds)])
     context = {
         "odds_configured": bool(config.odds_api_key),
         "football_configured": bool(config.football_data_token),
