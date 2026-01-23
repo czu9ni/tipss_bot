@@ -6253,6 +6253,15 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                         except Exception as exc:
                             td_logger.warning("TheRundown events fetch failed: %s", exc)
                     cache.set(date_str, "therundown_events", events_cache)
+                else:
+                    refresh_requested = False
+                    events_cache = []
+                    for sport_id in _therundown_sport_ids():
+                        try:
+                            events_cache.extend(td_client.events_for_date(sport_id, date_str))
+                        except Exception as exc:
+                            td_logger.warning("TheRundown events fetch failed: %s", exc)
+                    cache.set(date_str, "therundown_events", events_cache)
                 therundown_events = list(events_cache or [])
                 for event in therundown_events:
                     teams = td_client.event_teams(event)
