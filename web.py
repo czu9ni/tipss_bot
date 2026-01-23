@@ -2513,6 +2513,8 @@ def _enrich_pick(pick: dict) -> dict:
     _attach_sportradar_extras(pick)
     if not pick.get("story"):
         pick["story"] = _build_story(pick)
+    if not pick.get("model_prob"):
+        pick["model_prob"] = float(pick.get("score") or 0.0)
     pick["confidence"] = _confidence_profile(pick)
     if "risk_flags" not in pick:
         pick["risk_flags"] = _pick_risk_flags(None, pick)
@@ -6231,12 +6233,27 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
     table_scores = _build_table_scores(points_map)
 
     competitions = []
+    fallback_competitions = [
+        {"code": "BSA", "name": "Campeonato Brasileiro Serie A"},
+        {"code": "ELC", "name": "Championship"},
+        {"code": "PL", "name": "Premier League"},
+        {"code": "CL", "name": "UEFA Champions League"},
+        {"code": "EC", "name": "European Championship"},
+        {"code": "FL1", "name": "Ligue 1"},
+        {"code": "BL1", "name": "Bundesliga"},
+        {"code": "SA", "name": "Serie A"},
+        {"code": "DED", "name": "Eredivisie"},
+        {"code": "PPL", "name": "Primeira Liga"},
+        {"code": "CLI", "name": "Copa Libertadores"},
+        {"code": "PD", "name": "Primera Division"},
+        {"code": "WC", "name": "FIFA World Cup"},
+    ]
     recent_matches = []
     standings = []
     if not FAST_MODE:
         competitions = _fetch_competitions_fd(config.football_data_token)
     if not competitions:
-        competitions = [{"code": "n/a", "name": "n/a"}]
+        competitions = fallback_competitions
     allowed_codes = {str(comp.get("code") or "") for comp in competitions if comp.get("code")}
     primary = _primary_competition(competitions)
     if primary:
@@ -6900,6 +6917,8 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
     api_online = sum(1 for item in api_items if item.get("status") in {"ok"})
     target_matches_odds = [pick for pick in (target_matches or []) if (pick.get("odds") or 0) > 1.01]
     target_matches_no_odds = [pick for pick in (target_matches or []) if (pick.get("odds") or 0) <= 1.01]
+    if not target_matches_no_odds and best_pick and (best_pick.get("odds") or 0) <= 1.01:
+        target_matches_no_odds = [best_pick]
     context = {
         "odds_configured": bool(config.odds_api_key),
         "football_configured": bool(config.football_data_token),
