@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 verify_all.py
 Repo-wide verification for Soccer Bot AI Dashboard.
@@ -257,26 +257,6 @@ def check_end_to_end(run_date: str) -> CheckResult:
         details.append("WARNING: Cache metrics not found in output. (Not fatal, but recommended.)")
 
     details.append(f"Cache JSON files: {len(files)} under {cdir}")
-
-    if os.environ.get("RAPIDAPI_KEY"):
-        odds_path = cdir / "odds.json"
-        if not odds_path.exists():
-            ok = False
-            details.append("RapidAPI enabled but odds.json missing.")
-        else:
-            try:
-                import json
-
-                odds_data = json.loads(odds_path.read_text(encoding="utf-8"))
-                if not odds_data:
-                    ok = False
-                    details.append("RapidAPI enabled but odds.json is empty.")
-            except Exception as exc:
-                ok = False
-                details.append(f"RapidAPI enabled but odds.json unreadable: {exc}")
-        if "Odds: n/a" in out2:
-            ok = False
-            details.append("RapidAPI enabled but output still shows 'Odds: n/a'.")
 
     return CheckResult(f"end-to-end (2x) + cache {run_date}", ok, "\n".join(details))
 

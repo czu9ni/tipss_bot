@@ -44,6 +44,20 @@ def _build_parser() -> argparse.ArgumentParser:
         cmd.add_argument("--date", help="YYYY-MM-DD")
         cmd.add_argument("--no-cache", action="store_true", help="Force refresh (ignore cache)")
         cmd.add_argument("--log-level", default="INFO", help="Logging level")
+    save_cmd = sub.add_parser("save", help="Save a manual pick into the database")
+    save_cmd.add_argument("--sport-key", required=True)
+    save_cmd.add_argument("--commence-time", required=True, help="ISO time, e.g. 2026-01-26T20:00:00Z")
+    save_cmd.add_argument("--home-team", required=True)
+    save_cmd.add_argument("--away-team", required=True)
+    save_cmd.add_argument("--market-key", required=True, help="h2h|totals|btts|double_chance")
+    save_cmd.add_argument("--outcome", required=True)
+    save_cmd.add_argument("--line", type=float)
+    save_cmd.add_argument("--odds", type=float, default=0.0)
+    save_cmd.add_argument("--score", type=float, default=0.0)
+    save_cmd.add_argument("--risk", default="yellow")
+    settle_cmd = sub.add_parser("settle", help="Manually settle a saved pick")
+    settle_cmd.add_argument("--id", type=int, required=True)
+    settle_cmd.add_argument("--result", required=True, choices=["win", "lose", "push"])
     odds_parser = sub.add_parser("odds", help="TheRundown odds tools")
     odds_sub = odds_parser.add_subparsers(dest="odds_command", required=True)
     for name in ("openers", "closing", "delta"):
@@ -65,6 +79,82 @@ def _load_env() -> None:
 
 def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default)
+
+
+def _market_key_from_pick(value: str) -> str:
+    val = value.strip().lower()
+    if "1x2" in val:
+        return "h2h"
+    if "over/under" in val or "over" in val or "under" in val:
+        return "totals"
+    if "btts" in val:
+        return "btts"
+    if "dupla" in val:
+        return "double_chance"
+    return val
+
+
+def _passes_value_filters(pick: Pick) -> bool:
+    implied = pick.implied_prob
+    if not isinstance(implied, (int, float)) or implied <= 0:
+        return True
+    odds = 1.0 / implied if implied > 0 else None
+    odds_min = float(_env("ODDS_MIN", "1.6") or 0)
+    odds_max = float(_env("ODDS_MAX", "0") or 0)
+    if odds is not None:
+        if odds_min > 0 and odds < odds_min:
+            return False
+        if odds_max > 0 and odds > odds_max:
+            return False
+    allowlist = {item.strip() for item in _env("MARKET_ALLOWLIST", "").split(",") if item.strip()}
+    if allowlist and _market_key_from_pick(pick.market) not in allowlist:
+        return False
+    min_value = float(_env("MIN_VALUE_EDGE", "0.02") or 0)
+    min_ev = float(_env("MIN_EV", "0.0") or 0)
+    min_model = float(_env("MIN_MODEL_PROB", "0.35") or 0)
+    if isinstance(pick.model_prob, (int, float)) and pick.model_prob < min_model:
+        return False
+    if isinstance(pick.value, (int, float)) and pick.value < min_value:
+        return False
+    if isinstance(pick.ev, (int, float)) and pick.ev < min_ev:
+        return False
+    return True
+
+
+def _combo_score(pick_a: Pick, pick_b: Pick, target: float) -> tuple[float, float]:
+    odds_a = 1.0 / pick_a.implied_prob if pick_a.implied_prob else 0.0
+    odds_b = 1.0 / pick_b.implied_prob if pick_b.implied_prob else 0.0
+    combined = odds_a * odds_b
+    base = (pick_a.score + pick_b.score) / 2.0
+    distance = max(0.0, 1.0 - abs(combined - target) / 0.3)
+    score = base * 0.8 + distance * 0.2
+    return score, combined
+
+
+def _best_combo(picks: list[Pick]) -> tuple[list[Pick], float] | None:
+    target = float(_env("COMBO_TARGET", "2.0") or 2.0)
+    min_val = float(_env("COMBO_MIN", "1.85") or 1.85)
+    max_val = float(_env("COMBO_MAX", "2.15") or 2.15)
+    eligible = [p for p in picks if isinstance(p.implied_prob, (int, float)) and p.implied_prob > 0]
+    eligible = sorted(eligible, key=lambda p: p.score, reverse=True)[:30]
+    best = None
+    nearest = None
+    for i in range(len(eligible)):
+        for j in range(i + 1, len(eligible)):
+            score, combined = _combo_score(eligible[i], eligible[j], target)
+            if not (min_val <= combined <= max_val):
+                distance = abs(combined - target)
+                if nearest is None or distance < nearest[0]:
+                    nearest = (distance, combined, score, eligible[i], eligible[j])
+                continue
+            if best is None or score > best[0]:
+                best = (score, combined, [eligible[i], eligible[j]])
+    if best:
+        return best[2], best[1]
+    if nearest:
+        _, combined, _, left, right = nearest
+        return [left, right], combined
+    return None
 
 
 def _require_stats_key(provider: str, api_key: str) -> None:
@@ -270,8 +360,8 @@ def _find_therundown_event(
     for item in candidates:
         if item.get("date") != date_str:
             continue
-        cand_home = item.get("home_tokens", set())
-        cand_away = item.get("away_tokens", set())
+        cand_home = set(item.get("home_tokens") or [])
+        cand_away = set(item.get("away_tokens") or [])
         score_same = (_similarity(home_tokens, cand_home) + _similarity(away_tokens, cand_away)) / 2.0
         score_swap = (_similarity(home_tokens, cand_away) + _similarity(away_tokens, cand_home)) / 2.0
         score = max(score_same, score_swap)
@@ -299,20 +389,50 @@ def _fetch_data(date_str: str, cache: DiskCache, no_cache: bool, client) -> dict
     provider_name = _env("STATS_PROVIDER", "api_football")
     if fixtures_raw is None:
         primary = _env("STATS_PROVIDER", "api_football")
-        stats_provider = _build_stats_provider(primary, client)
-        fixtures = stats_provider.fetch_fixtures(date_str)
+        if no_cache:
+            cached_fixtures = cache.get(date_str, "fixtures")
+            if cached_fixtures is not None:
+                fixtures = _deserialize_fixtures(cached_fixtures)
+                cached_provider = cache.get(date_str, "stats_provider") or {}
+                provider_name = str(cached_provider.get("name") or primary)
+                cache.set(date_str, "stats_provider", {"name": provider_name})
         if not fixtures:
-            fallback_provider = _env("STATS_PROVIDER_FALLBACK", "sportradar")
-            if fallback_provider != primary:
-                stats_provider = _build_stats_provider(fallback_provider, client)
+            stats_provider = _build_stats_provider(primary, client)
+            try:
                 fixtures = stats_provider.fetch_fixtures(date_str)
-                provider_name = fallback_provider
+            except RuntimeError as exc:
+                logger.warning("Primary stats provider failed: %s", exc)
+                cached_fixtures = cache.get(date_str, "fixtures")
+                if cached_fixtures is not None:
+                    fixtures = _deserialize_fixtures(cached_fixtures)
+                    cached_provider = cache.get(date_str, "stats_provider") or {}
+                    provider_name = str(cached_provider.get("name") or primary)
+                    cache.set(date_str, "stats_provider", {"name": provider_name})
+                else:
+                    raise
+            if not fixtures:
+                fallback_provider = _env("STATS_PROVIDER_FALLBACK", "sportradar")
+                if fallback_provider != primary:
+                    stats_provider = _build_stats_provider(fallback_provider, client)
+                    try:
+                        fixtures = stats_provider.fetch_fixtures(date_str)
+                        provider_name = fallback_provider
+                    except RuntimeError as exc:
+                        logger.warning("Fallback stats provider failed: %s", exc)
+                        cached_fixtures = cache.get(date_str, "fixtures")
+                        if cached_fixtures is not None:
+                            fixtures = _deserialize_fixtures(cached_fixtures)
+                            cached_provider = cache.get(date_str, "stats_provider") or {}
+                            provider_name = str(cached_provider.get("name") or fallback_provider)
+                            cache.set(date_str, "stats_provider", {"name": provider_name})
+                        else:
+                            raise
+                else:
+                    provider_name = primary
             else:
                 provider_name = primary
-        else:
-            provider_name = primary
-        cache.set(date_str, "fixtures", _serialize_fixtures(fixtures))
-        cache.set(date_str, "stats_provider", {"name": provider_name})
+            cache.set(date_str, "fixtures", _serialize_fixtures(fixtures))
+            cache.set(date_str, "stats_provider", {"name": provider_name})
     else:
         fixtures = _deserialize_fixtures(fixtures_raw)
 
@@ -321,25 +441,48 @@ def _fetch_data(date_str: str, cache: DiskCache, no_cache: bool, client) -> dict
     therundown_events: list[dict] = []
     if _therundown_enabled():
         td_client = _therundown_client(client)
-        dates_cache = _load_cached(cache, date_str, "therundown_dates", no_cache)
-        if dates_cache is None:
-            dates_cache = {}
-            for sport_id in _therundown_sport_ids():
-                try:
-                    dates_cache[sport_id] = td_client.dates_with_odds(sport_id)
-                except RuntimeError as exc:
-                    logger.warning("TheRundown dates failed: %s", exc)
-            cache.set(date_str, "therundown_dates", dates_cache)
+        therundown_ok = True
+        cached_td_dates = cache.get(date_str, "therundown_dates") if no_cache else None
+        cached_td_events = cache.get(date_str, "therundown_events") if no_cache else None
+        if no_cache and cached_td_events is not None:
+            dates_cache = cached_td_dates or {}
+            events_cache = cached_td_events
+            therundown_ok = False
+        else:
+            dates_cache = _load_cached(cache, date_str, "therundown_dates", no_cache)
+            if dates_cache is None:
+                dates_cache = {}
+                for sport_id in _therundown_sport_ids():
+                    try:
+                        dates_cache[sport_id] = td_client.dates_with_odds(sport_id)
+                    except RuntimeError as exc:
+                        logger.warning("TheRundown dates failed: %s", exc)
+                        therundown_ok = False
+                        break
+                if not therundown_ok:
+                    cached_dates = cache.get(date_str, "therundown_dates")
+                    if cached_dates is not None:
+                        dates_cache = cached_dates
+                        therundown_ok = True
+                cache.set(date_str, "therundown_dates", dates_cache)
 
-        events_cache = _load_cached(cache, date_str, "therundown_events", no_cache)
-        if events_cache is None:
-            events_cache = []
-            for sport_id in _therundown_sport_ids():
-                try:
-                    events_cache.extend(td_client.events_for_date(sport_id, date_str))
-                except RuntimeError as exc:
-                    logger.warning("TheRundown events failed: %s", exc)
-            cache.set(date_str, "therundown_events", events_cache)
+            events_cache = _load_cached(cache, date_str, "therundown_events", no_cache)
+            if events_cache is None:
+                events_cache = []
+                if therundown_ok:
+                    for sport_id in _therundown_sport_ids():
+                        try:
+                            events_cache.extend(td_client.events_for_date(sport_id, date_str))
+                        except RuntimeError as exc:
+                            logger.warning("TheRundown events failed: %s", exc)
+                            therundown_ok = False
+                            break
+                if not therundown_ok:
+                    cached_events = cache.get(date_str, "therundown_events")
+                    if cached_events is not None:
+                        events_cache = cached_events
+                        therundown_ok = True
+                cache.set(date_str, "therundown_events", events_cache)
         therundown_events = list(events_cache)
 
         for event in therundown_events:
@@ -372,12 +515,12 @@ def _fetch_data(date_str: str, cache: DiskCache, no_cache: bool, client) -> dict
                     home_tokens |= _token_set(name)
                 if item.get("is_away"):
                     away_tokens |= _token_set(name)
-            payload["home_tokens"] = home_tokens
-            payload["away_tokens"] = away_tokens
+            payload["home_tokens"] = sorted(home_tokens)
+            payload["away_tokens"] = sorted(away_tokens)
             therundown_candidates.append(payload)
         cache.set(date_str, "therundown_event_map", therundown_map)
 
-        if no_cache:
+        if no_cache and therundown_ok:
             last_id = "1"
             cached_delta = _load_cached(cache, date_str, "therundown_delta", no_cache=False)
             if isinstance(cached_delta, dict):
@@ -457,6 +600,8 @@ def _pick_best(
     logger = get_logger("cli")
     stats_provider = None
     standings_raw = _load_cached(cache, date_str, "standings", no_cache)
+    if standings_raw is None and no_cache:
+        standings_raw = cache.get(date_str, "standings")
     standings_map: dict[str, list[dict]] = dict(standings_raw or {})
 
     cached_provider = _load_cached(cache, date_str, "stats_provider", no_cache)
@@ -467,6 +612,8 @@ def _pick_best(
         key = f"{comp_id}:{season}"
         if key in standings_map:
             return standings_map[key]
+        if no_cache:
+            return []
         if stats_provider is None:
             return []
         try:
@@ -478,7 +625,8 @@ def _pick_best(
         return standings_map[key]
 
     fixtures_sorted = sorted(fixtures, key=lambda f: (f.commence_time, f.id))
-    fixtures_limited = fixtures_sorted[:10]
+    max_fixtures = int(os.environ.get("MAX_SCORING_FIXTURES", "50"))
+    fixtures_limited = fixtures_sorted if max_fixtures <= 0 else fixtures_sorted[:max_fixtures]
     if stats_provider is None:
         stats_provider = _build_stats_provider(provider_name, client)
 
@@ -503,6 +651,7 @@ def _pick_best(
             stats=None,
             events=None,
         )
+        picks = [item for item in picks if _passes_value_filters(item)]
         best = max(picks, key=lambda p: p.score)
         pre_scored.append((best, fixture))
 
@@ -510,10 +659,23 @@ def _pick_best(
         raise RuntimeError("No fixtures available.")
 
     pre_scored.sort(key=lambda item: (-item[0].score, item[1].id))
-    top_two = [item[1] for item in pre_scored[:2]]
+    combo_candidates = [item[0] for item in pre_scored]
+    combo = _best_combo(combo_candidates)
+    if combo:
+        combo_picks, _ = combo
+        match_ids = {p.fixture_id for p in combo_picks}
+        top_two = [item[1] for item in pre_scored if item[1].id in match_ids][:2]
+    else:
+        top_two = [item[1] for item in pre_scored[:2]]
 
-    events_raw = _load_cached(cache, date_str, "events", no_cache) or {}
-    stats_raw = _load_cached(cache, date_str, "stats", no_cache) or {}
+    events_raw = _load_cached(cache, date_str, "events", no_cache)
+    if events_raw is None and no_cache:
+        events_raw = cache.get(date_str, "events")
+    stats_raw = _load_cached(cache, date_str, "stats", no_cache)
+    if stats_raw is None and no_cache:
+        stats_raw = cache.get(date_str, "stats")
+    events_raw = events_raw or {}
+    stats_raw = stats_raw or {}
     events_map: dict[str, list[dict]] = dict(events_raw)
     stats_map: dict[str, dict] = dict(stats_raw)
 
@@ -541,11 +703,29 @@ def _pick_best(
                 odds_map[fixture.id] = {"markets": markets}
 
         if fixture.id not in events_map:
-            events = stats_provider.fetch_match_events(fixture.id)
-            events_map[fixture.id] = events
+            try:
+                events = stats_provider.fetch_match_events(fixture.id)
+                events_map[fixture.id] = events
+            except RuntimeError as exc:
+                cached_events = cache.get(date_str, "events") or {}
+                cached = cached_events.get(fixture.id)
+                if cached is not None:
+                    events_map[fixture.id] = cached
+                else:
+                    logger.warning("Events fetch failed for %s: %s", fixture.id, exc)
+                    events_map[fixture.id] = []
         if fixture.id not in stats_map:
-            stats = stats_provider.fetch_match_stats(fixture.id)
-            stats_map[fixture.id] = _serialize_stats(stats)
+            try:
+                stats = stats_provider.fetch_match_stats(fixture.id)
+                stats_map[fixture.id] = _serialize_stats(stats)
+            except RuntimeError as exc:
+                cached_stats = cache.get(date_str, "stats") or {}
+                cached = cached_stats.get(fixture.id)
+                if cached is not None:
+                    stats_map[fixture.id] = cached
+                else:
+                    logger.warning("Stats fetch failed for %s: %s", fixture.id, exc)
+                    stats_map[fixture.id] = _serialize_stats(MatchStats(None, None, None, None))
 
     cache.set(date_str, "events", events_map)
     cache.set(date_str, "stats", stats_map)
@@ -570,10 +750,15 @@ def _pick_best(
             stats=asdict(stats) if stats else None,
             events=events,
         )
+        picks = [item for item in picks if _passes_value_filters(item)]
         best = max(picks, key=lambda p: p.score)
         final_picks.append(best)
 
-    best = choose_best_picks(final_picks, limit=2)
+    combo_final = _best_combo(final_picks)
+    if combo_final:
+        best, _ = combo_final
+    else:
+        best = choose_best_picks(final_picks, limit=2)
     if len(best) < 2:
         raise RuntimeError("Not enough scored matches to return 2 picks.")
     return best
@@ -593,6 +778,36 @@ def _save_picks(cache: DiskCache, date_str: str, picks: list[Pick]) -> None:
         "INSERT OR REPLACE INTO cached_picks (key, payload, updated_at) VALUES (?, ?, ?)",
         ("cli_daily", data, now),
     )
+    for pick in picks:
+        implied = pick.implied_prob
+        odds_val = 0.0
+        if isinstance(implied, (int, float)) and implied > 0:
+            odds_val = 1.0 / implied
+        has_odds = 1 if odds_val > 1.01 else 0
+        source = "odds" if has_odds else "no_odds"
+        db.connection.execute(
+            """
+            INSERT OR IGNORE INTO saved_picks
+            (created_at, sport_key, commence_time, home_team, away_team, market_key, outcome, line, odds, score, risk, status, source, has_odds)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                now,
+                "",
+                date_str,
+                pick.home_team,
+                pick.away_team,
+                _market_key_from_pick(pick.market),
+                pick.outcome,
+                None,
+                float(odds_val),
+                float(pick.score),
+                "yellow",
+                "pending",
+                source,
+                has_odds,
+            ),
+        )
     db.connection.commit()
 
 
@@ -697,6 +912,60 @@ def main() -> None:
     if args.command == "odds":
         _run_odds_command(args, cache, client)
         print(f"\nAPI_CALLS_TOTAL={client.calls} CACHE_HITS={cache.stats.hits} CACHE_MISSES={cache.stats.misses}")
+        return
+    if args.command == "save":
+        db_url = _env("SOCCER_DB_URL")
+        if not db_url:
+            raise RuntimeError("SOCCER_DB_URL missing")
+        db = connect(db_url)
+        db.ensure_schema()
+        now = datetime.utcnow().isoformat(timespec="seconds")
+        odds_val = float(args.odds or 0.0)
+        has_odds = 1 if odds_val > 1.01 else 0
+        source = "odds" if has_odds else "no_odds"
+        db.connection.execute(
+            """
+            INSERT OR IGNORE INTO saved_picks
+            (created_at, sport_key, commence_time, home_team, away_team, market_key, outcome, line, odds, score, risk, status, source, has_odds)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                now,
+                args.sport_key,
+                args.commence_time,
+                args.home_team,
+                args.away_team,
+                args.market_key,
+                args.outcome,
+                args.line,
+                odds_val,
+                float(args.score or 0.0),
+                args.risk,
+                "pending",
+                source,
+                has_odds,
+            ),
+        )
+        db.connection.commit()
+        print("Saved manual pick.")
+        return
+    if args.command == "settle":
+        db_url = _env("SOCCER_DB_URL")
+        if not db_url:
+            raise RuntimeError("SOCCER_DB_URL missing")
+        db = connect(db_url)
+        db.ensure_schema()
+        now = datetime.utcnow().isoformat(timespec="seconds")
+        db.connection.execute(
+            """
+            UPDATE saved_picks
+            SET status = ?, settled_at = ?, result = ?
+            WHERE id = ?
+            """,
+            ("settled", now, args.result, int(args.id)),
+        )
+        db.connection.commit()
+        print("Settled pick.")
         return
     if args.command in {"pick", "run"}:
         if not data:

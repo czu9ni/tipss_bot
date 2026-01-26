@@ -1,0 +1,5 @@
+flask>=2.2
+flask-compress>=1.13
+pydantic>=1.10
+requests>=2.31
+urllib3>=1.26

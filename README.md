@@ -2,12 +2,19 @@
 
 ## Setup
 
+Telepitsd a csomagokat:
+
+```bash
+pip install -r requirements.txt
+```
+
 Masold a `.env.example`-t `.env`-be, es toltsd ki az API kulcsokat:
 
+- `FOOTBALL_DATA_TOKEN` (kobtelezo)
 - `STATS_PROVIDER` (alap: `api_football`)
 - `ODDS_PROVIDER` (alap: `the_odds_api`)
 - `API_FOOTBALL_KEY`
-- `THE_ODDS_API_KEY`
+- `ODDS_API_KEY` (kompatibilis: `THE_ODDS_API_KEY`)
 - `SPORTRADAR_API_KEY` + `SPORTRADAR_API_BASE` (opcionalis)
 - `STATS_PROVIDER_FALLBACK` (alap: `sportradar`)
 - `CACHE_DIR` (alap: `data/cache`)
@@ -77,3 +84,9 @@ python -m soccer_bot.backtest_live --days 3 --max-sports 8
 
 Megjegyzes: az Odds API scores vegpontja 1-3 napra enged visszanezni.
 Ha nincs befejezett meccs, az eredmeny 0 lesz.
+
+## Web inditas (Windows)
+
+```bash
+start.cmd
+```

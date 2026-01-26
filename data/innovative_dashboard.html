@@ -194,6 +194,37 @@
       font-size: 0.85rem;
       color: var(--muted);
     }
+    .tabbar {
+      display: flex;
+      gap: 0.75rem;
+      margin: 1rem 0 1.5rem;
+      flex-wrap: wrap;
+    }
+    .tab-btn {
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 999px;
+      padding: 0.55rem 1.2rem;
+      font-weight: 700;
+      color: var(--text);
+      cursor: pointer;
+      transition: background 0.2s ease, transform 0.2s ease;
+    }
+    .tab-btn.active {
+      background: rgba(77, 245, 255, 0.2);
+      border-color: rgba(77, 245, 255, 0.8);
+    }
+    .tab-panel {
+      display: none;
+    }
+    .tab-panel.active {
+      display: block;
+    }
+    .chart-card canvas {
+      width: 100%;
+      height: 220px;
+      display: block;
+    }
     .status-value {
       display: flex;
       justify-content: space-between;
@@ -421,6 +452,11 @@
         {% endif %}
       </div>
     </header>
+    <div class="tabbar">
+      <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+      <button class="tab-btn" data-tab="history">EredmÃ©nyek</button>
+    </div>
+    <div class="tab-panel active" data-tab="dashboard">
 
     <div class="card status-card">
       <div class="status-grid">
@@ -647,8 +683,59 @@
       {% endif %}
     </article>
   </template>
+  </div>
+  <div class="tab-panel" data-tab="history">
+    <section class="grid">
+      <article class="card">
+        <h3>Napi statisztika (mai naptÃ³l)</h3>
+        <p class="small-label">Ã–sszesen: {{ saved_summary.total }} tipp, ROI: {{ '%.2f'|format(saved_summary.roi) }}</p>
+        <p class="small-label">30 nap: ROI {{ '%.2f'|format(saved_summary_30d.roi) }} | 90 nap: ROI {{ '%.2f'|format(saved_summary_90d.roi) }}</p>
+        <p class="small-label">Odds tippek: {{ saved_by_source.get('odds', {}).get('total', 0) }} | Odds nÃ©lkÃ¼l: {{ saved_by_source.get('no_odds', {}).get('total', 0) }}</p>
+      </article>
+      <article class="card chart-card">
+        <h3>ROI â€“ Odds</h3>
+        <canvas id="chart-odds"></canvas>
+      </article>
+      <article class="card chart-card">
+        <h3>ROI â€“ Odds nÃ©lkÃ¼l</h3>
+        <canvas id="chart-no-odds"></canvas>
+      </article>
+    </section>
+    <section class="grid">
+      <article class="card table-card">
+        <h3>KorÃ¡bbi tippek</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Nap</th>
+              <th>Meccs</th>
+              <th>Piac</th>
+              <th>Kimenetel</th>
+              <th>Odds</th>
+              <th>EredmÃ©ny</th>
+              <th>ForrÃ¡s</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for pick in saved_picks %}
+            <tr>
+              <td>{{ pick.day_key or pick.created_at[:10] }}</td>
+              <td>{{ pick.home_team }} vs {{ pick.away_team }}</td>
+              <td>{{ pick.market_label }}</td>
+              <td>{{ pick.outcome }}</td>
+              <td>{{ '%.2f'|format(pick.odds) }}</td>
+              <td>{{ pick.result_label }}</td>
+              <td>{{ pick.source or '-' }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </article>
+    </section>
+  </div>
   <script>
     const savedPicks = {{ saved_picks|tojson }};
+    const dailyRoi = {{ daily_roi|tojson }};
     const CHUNK_SIZE = 20;
     let savedOffset = 0;
 
@@ -732,10 +819,56 @@
       });
     };
 
+    const drawLineChart = (canvas, series, color) => {
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      const width = canvas.clientWidth || 600;
+      const height = canvas.clientHeight || 220;
+      canvas.width = width;
+      canvas.height = height;
+      ctx.clearRect(0, 0, width, height);
+      if (!series || series.length === 0) {
+        ctx.fillStyle = "rgba(255,255,255,0.6)";
+        ctx.fillText("Nincs adat", 12, 24);
+        return;
+      }
+      const values = series.map(item => item.roi);
+      const min = Math.min(...values, -0.2);
+      const max = Math.max(...values, 0.2);
+      const pad = 20;
+      const scaleX = (width - pad * 2) / Math.max(series.length - 1, 1);
+      const scaleY = (height - pad * 2) / (max - min || 1);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      series.forEach((item, idx) => {
+        const x = pad + idx * scaleX;
+        const y = height - pad - (item.roi - min) * scaleY;
+        if (idx === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    };
+
+    const initTabs = () => {
+      const buttons = document.querySelectorAll(".tab-btn");
+      const panels = document.querySelectorAll(".tab-panel");
+      const setTab = name => {
+        buttons.forEach(btn => btn.classList.toggle("active", btn.dataset.tab === name));
+        panels.forEach(panel => panel.classList.toggle("active", panel.dataset.tab === name));
+      };
+      buttons.forEach(btn => {
+        btn.addEventListener("click", () => setTab(btn.dataset.tab));
+      });
+    };
+
     document.addEventListener("DOMContentLoaded", () => {
       performance.mark("init-start");
       requestAnimationFrame(() => {
+        initTabs();
         initDashboard();
+        drawLineChart(document.getElementById("chart-odds"), dailyRoi.odds || [], "#4df5ff");
+        drawLineChart(document.getElementById("chart-no-odds"), dailyRoi.no_odds || [], "#ff4d98");
         const app = document.getElementById("app");
         const skeleton = document.getElementById("skeleton");
         if (skeleton) {

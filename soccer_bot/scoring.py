@@ -47,6 +47,10 @@ class Pick:
     score: float
     breakdown: ScoreBreakdown
     explanation_hu: str
+    model_prob: float | None = None
+    implied_prob: float | None = None
+    ev: float | None = None
+    value: float | None = None
 
 
 def _ppg(points: int | None, played: int | None) -> float:
@@ -78,7 +82,53 @@ def _implied_prob(odd: float | None) -> float | None:
 def _blend_prob(model_prob: float, odds_prob: float | None) -> float:
     if odds_prob is None:
         return model_prob
-    return max(0.0, min(1.0, model_prob * 0.7 + odds_prob * 0.3))
+    return max(0.0, min(1.0, model_prob * 0.75 + odds_prob * 0.25))
+
+
+def _data_coverage(
+    *,
+    standings_ok: bool,
+    odds_ok: bool,
+    stats_ok: bool,
+    events_ok: bool,
+) -> float:
+    coverage = 0.5
+    if standings_ok:
+        coverage += 0.15
+    if stats_ok:
+        coverage += 0.15
+    if events_ok:
+        coverage += 0.1
+    if odds_ok:
+        coverage += 0.1
+    return max(0.5, min(0.95, coverage))
+
+
+def _calibrate_prob(prob: float, coverage: float) -> float:
+    # Shrink toward 0.5 when data coverage is weak.
+    return max(0.02, min(0.98, 0.5 + (prob - 0.5) * coverage))
+
+
+def _ev_score(ev: float | None) -> float:
+    if ev is None:
+        return 0.0
+    # Map a small negative EV to 0 and strong positive EV toward 1.
+    return max(0.0, min(1.0, (ev + 0.05) / 0.25))
+
+
+def _select_score(model_prob: float, implied_prob: float | None, odds: float | None) -> tuple[float, float | None]:
+    if not isinstance(odds, (int, float)) or odds <= 1.0:
+        return model_prob, None
+    blended = _blend_prob(model_prob, implied_prob)
+    ev = blended * float(odds) - 1.0
+    score = max(0.0, min(1.0, blended * 0.65 + _ev_score(ev) * 0.35))
+    return score, ev
+
+
+def _value_edge(model_prob: float, implied_prob: float | None) -> float:
+    if implied_prob is None:
+        return 0.0
+    return model_prob - implied_prob
 
 
 def _fmt(value: int | float | None) -> str:
@@ -146,7 +196,8 @@ def score_fixture(
         events_score = min(0.05, len(events) / 200)
 
     odds_score = 0.0
-    if odds and odds.get("markets"):
+    odds_ok = bool(odds and odds.get("markets"))
+    if odds_ok:
         odds_score = 0.08
 
     total = base + standings_score + form_score + goals_score + stats_score + odds_score + events_score
@@ -189,13 +240,42 @@ def score_fixture(
         total=total,
     )
 
+    standings_ok = bool(home_row or away_row)
+    stats_ok = bool(stats)
+    events_ok = bool(events)
+    coverage = _data_coverage(
+        standings_ok=standings_ok,
+        odds_ok=odds_ok,
+        stats_ok=stats_ok,
+        events_ok=events_ok,
+    )
     markets = (odds or {}).get("markets", {}) if odds else {}
     picks: list[Pick] = []
 
-    home_prob = _blend_prob(0.45 + standings_score + form_score, _implied_prob(markets.get("1x2", {}).get("home")))
-    draw_prob = _blend_prob(0.2 - abs(standings_score), _implied_prob(markets.get("1x2", {}).get("draw")))
-    away_prob = _blend_prob(0.45 - standings_score - form_score, _implied_prob(markets.get("1x2", {}).get("away")))
-    outcome_1x2 = "Hazai gyozelem" if home_prob >= max(draw_prob, away_prob) else ("Döntetlen" if draw_prob >= away_prob else "Vendeg gyozelem")
+    odds_1x2 = markets.get("1x2", {})
+    home_odd = odds_1x2.get("home")
+    draw_odd = odds_1x2.get("draw")
+    away_odd = odds_1x2.get("away")
+    home_imp = _implied_prob(home_odd)
+    draw_imp = _implied_prob(draw_odd)
+    away_imp = _implied_prob(away_odd)
+    home_base = max(0.05, 0.45 + standings_score + form_score)
+    draw_base = max(0.05, 0.2 - abs(standings_score))
+    away_base = max(0.05, 0.45 - standings_score - form_score)
+    total_base = home_base + draw_base + away_base
+    home_model = _calibrate_prob(min(0.9, max(0.05, home_base / total_base)), coverage)
+    draw_model = _calibrate_prob(min(0.8, max(0.05, draw_base / total_base)), coverage)
+    away_model = _calibrate_prob(min(0.9, max(0.05, away_base / total_base)), coverage)
+    home_score, home_ev = _select_score(home_model, home_imp, home_odd)
+    draw_score, draw_ev = _select_score(draw_model, draw_imp, draw_odd)
+    away_score, away_ev = _select_score(away_model, away_imp, away_odd)
+    outcome_1x2 = "Hazai gyozelem" if home_score >= max(draw_score, away_score) else ("Dontetlen" if draw_score >= away_score else "Vendeg gyozelem")
+    if outcome_1x2 == "Hazai gyozelem":
+        pick_model, pick_imp, pick_ev = home_model, home_imp, home_ev
+    elif outcome_1x2 == "Dontetlen":
+        pick_model, pick_imp, pick_ev = draw_model, draw_imp, draw_ev
+    else:
+        pick_model, pick_imp, pick_ev = away_model, away_imp, away_ev
     picks.append(
         Pick(
             fixture_id=fixture_id,
@@ -203,15 +283,30 @@ def score_fixture(
             away_team=away_team,
             market="1X2",
             outcome=outcome_1x2,
-            score=total * 0.75 + max(home_prob, draw_prob, away_prob) * 0.25,
+            score=max(home_score, draw_score, away_score),
             breakdown=breakdown,
             explanation_hu=f"{base_explanation} Legvaloszinubb 1X2: {outcome_1x2}.",
+            model_prob=pick_model,
+            implied_prob=pick_imp,
+            ev=pick_ev,
+            value=_value_edge(pick_model, pick_imp),
         )
     )
 
-    over_prob = _blend_prob(_poisson_over25_prob(goals_total), _implied_prob(markets.get("over_under", {}).get("over_2.5")))
-    under_prob = _blend_prob(1 - _poisson_over25_prob(goals_total), _implied_prob(markets.get("over_under", {}).get("under_2.5")))
-    outcome_ou = "Over 2.5" if over_prob >= under_prob else "Under 2.5"
+    ou_market = markets.get("over_under", {})
+    over_odd = ou_market.get("over_2.5")
+    under_odd = ou_market.get("under_2.5")
+    over_imp = _implied_prob(over_odd)
+    under_imp = _implied_prob(under_odd)
+    over_model = _calibrate_prob(_poisson_over25_prob(goals_total), coverage)
+    under_model = _calibrate_prob(1 - _poisson_over25_prob(goals_total), coverage)
+    over_score, over_ev = _select_score(over_model, over_imp, over_odd)
+    under_score, under_ev = _select_score(under_model, under_imp, under_odd)
+    outcome_ou = "Over 2.5" if over_score >= under_score else "Under 2.5"
+    if outcome_ou.startswith("Over"):
+        pick_model, pick_imp, pick_ev = over_model, over_imp, over_ev
+    else:
+        pick_model, pick_imp, pick_ev = under_model, under_imp, under_ev
     picks.append(
         Pick(
             fixture_id=fixture_id,
@@ -219,15 +314,30 @@ def score_fixture(
             away_team=away_team,
             market="Over/Under 2.5",
             outcome=outcome_ou,
-            score=total * 0.7 + max(over_prob, under_prob) * 0.3,
+            score=max(over_score, under_score),
             breakdown=breakdown,
             explanation_hu=f"{base_explanation} Golok: {outcome_ou} valoszinubb.",
+            model_prob=pick_model,
+            implied_prob=pick_imp,
+            ev=pick_ev,
+            value=_value_edge(pick_model, pick_imp),
         )
     )
 
-    btts_yes = _blend_prob(min(0.9, expected_home * expected_away / 2.0), _implied_prob(markets.get("btts", {}).get("yes")))
-    btts_no = _blend_prob(1 - btts_yes, _implied_prob(markets.get("btts", {}).get("no")))
-    outcome_btts = "GG - Igen" if btts_yes >= btts_no else "GG - Nem"
+    btts_market = markets.get("btts", {})
+    btts_yes_odd = btts_market.get("yes")
+    btts_no_odd = btts_market.get("no")
+    btts_yes_imp = _implied_prob(btts_yes_odd)
+    btts_no_imp = _implied_prob(btts_no_odd)
+    btts_yes_model = _calibrate_prob(min(0.9, expected_home * expected_away / 2.0), coverage)
+    btts_no_model = _calibrate_prob(1 - min(0.9, expected_home * expected_away / 2.0), coverage)
+    btts_yes_score, btts_yes_ev = _select_score(btts_yes_model, btts_yes_imp, btts_yes_odd)
+    btts_no_score, btts_no_ev = _select_score(btts_no_model, btts_no_imp, btts_no_odd)
+    outcome_btts = "GG - Igen" if btts_yes_score >= btts_no_score else "GG - Nem"
+    if outcome_btts.endswith("Igen"):
+        pick_model, pick_imp, pick_ev = btts_yes_model, btts_yes_imp, btts_yes_ev
+    else:
+        pick_model, pick_imp, pick_ev = btts_no_model, btts_no_imp, btts_no_ev
     picks.append(
         Pick(
             fixture_id=fixture_id,
@@ -235,17 +345,36 @@ def score_fixture(
             away_team=away_team,
             market="BTTS",
             outcome=outcome_btts,
-            score=total * 0.7 + max(btts_yes, btts_no) * 0.3,
+            score=max(btts_yes_score, btts_no_score),
             breakdown=breakdown,
             explanation_hu=f"{base_explanation} GG becsles: {outcome_btts}.",
+            model_prob=pick_model,
+            implied_prob=pick_imp,
+            ev=pick_ev,
+            value=_value_edge(pick_model, pick_imp),
         )
     )
 
     dc_market = markets.get("double_chance", {})
-    dc_1x = _blend_prob(min(0.95, home_prob + draw_prob), _implied_prob(dc_market.get("1x")))
-    dc_x2 = _blend_prob(min(0.95, away_prob + draw_prob), _implied_prob(dc_market.get("x2")))
-    dc_12 = _blend_prob(min(0.95, home_prob + away_prob), _implied_prob(dc_market.get("12")))
-    outcome_dc = "1X" if dc_1x >= max(dc_x2, dc_12) else ("X2" if dc_x2 >= dc_12 else "12")
+    dc_1x_odd = dc_market.get("1x")
+    dc_x2_odd = dc_market.get("x2")
+    dc_12_odd = dc_market.get("12")
+    dc_1x_imp = _implied_prob(dc_1x_odd)
+    dc_x2_imp = _implied_prob(dc_x2_odd)
+    dc_12_imp = _implied_prob(dc_12_odd)
+    dc_1x_model = _calibrate_prob(min(0.95, home_model + draw_model), coverage)
+    dc_x2_model = _calibrate_prob(min(0.95, away_model + draw_model), coverage)
+    dc_12_model = _calibrate_prob(min(0.95, home_model + away_model), coverage)
+    dc_1x_score, dc_1x_ev = _select_score(dc_1x_model, dc_1x_imp, dc_1x_odd)
+    dc_x2_score, dc_x2_ev = _select_score(dc_x2_model, dc_x2_imp, dc_x2_odd)
+    dc_12_score, dc_12_ev = _select_score(dc_12_model, dc_12_imp, dc_12_odd)
+    outcome_dc = "1X" if dc_1x_score >= max(dc_x2_score, dc_12_score) else ("X2" if dc_x2_score >= dc_12_score else "12")
+    if outcome_dc == "1X":
+        pick_model, pick_imp, pick_ev = dc_1x_model, dc_1x_imp, dc_1x_ev
+    elif outcome_dc == "X2":
+        pick_model, pick_imp, pick_ev = dc_x2_model, dc_x2_imp, dc_x2_ev
+    else:
+        pick_model, pick_imp, pick_ev = dc_12_model, dc_12_imp, dc_12_ev
     picks.append(
         Pick(
             fixture_id=fixture_id,
@@ -253,12 +382,18 @@ def score_fixture(
             away_team=away_team,
             market="Dupla esely",
             outcome=outcome_dc,
-            score=total * 0.7 + max(dc_1x, dc_x2, dc_12) * 0.3,
+            score=max(dc_1x_score, dc_x2_score, dc_12_score),
             breakdown=breakdown,
             explanation_hu=f"{base_explanation} Dupla esely: {outcome_dc}.",
+            model_prob=pick_model,
+            implied_prob=pick_imp,
+            ev=pick_ev,
+            value=_value_edge(pick_model, pick_imp),
         )
     )
 
+    if not odds_ok:
+        picks = [item for item in picks if item.market.lower() != "dupla esely"]
     return picks
 
 

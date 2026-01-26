@@ -7,3 +7,4 @@ web.out.log
 web.err.log
 data/api_usage.json
 data/team_squads_cache.json
+data/cache/

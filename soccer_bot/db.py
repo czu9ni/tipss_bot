@@ -68,10 +68,30 @@ class Database:
             )
             """
         )
+        self._ensure_columns(
+            "saved_picks",
+            {
+                "source": "TEXT",
+                "has_odds": "INTEGER",
+                "day_key": "TEXT",
+            },
+        )
         self.connection.execute(
             """
             CREATE INDEX IF NOT EXISTS saved_picks_status
             ON saved_picks (status, commence_time)
+            """
+        )
+        self.connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS saved_picks_unique
+            ON saved_picks (sport_key, commence_time, home_team, away_team, market_key, outcome, source)
+            """
+        )
+        self.connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS saved_picks_day
+            ON saved_picks (day_key)
             """
         )
         self.connection.execute(
@@ -97,6 +117,13 @@ class Database:
             )
             _SCHEMA_READY = True
         self.connection.commit()
+
+    def _ensure_columns(self, table: str, columns: dict[str, str]) -> None:
+        existing = {row[1] for row in self.connection.execute(f"PRAGMA table_info({table})")}
+        for name, col_type in columns.items():
+            if name in existing:
+                continue
+            self.connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {col_type}")
 
 
 def connect(db_url: str) -> Database:

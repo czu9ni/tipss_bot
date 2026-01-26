@@ -208,8 +208,8 @@ def _find_therundown_event(
     for item in candidates:
         if item.get("date") != date_str:
             continue
-        cand_home = item.get("home_tokens", set())
-        cand_away = item.get("away_tokens", set())
+        cand_home = set(item.get("home_tokens") or [])
+        cand_away = set(item.get("away_tokens") or [])
         score_same = (_similarity(home_tokens, cand_home) + _similarity(away_tokens, cand_away)) / 2.0
         score_swap = (_similarity(home_tokens, cand_away) + _similarity(away_tokens, cand_home)) / 2.0
         score = max(score_same, score_swap)
@@ -219,6 +219,25 @@ def _find_therundown_event(
     if best and best_score >= threshold:
         return best
     return {}
+
+
+def _best_fixture_match(home: str, away: str, fixtures: list[dict]) -> dict | None:
+    home_tokens = _token_set(home)
+    away_tokens = _token_set(away)
+    best = None
+    best_score = 0.0
+    for item in fixtures:
+        cand_home = _token_set(str(item.get("home_team") or ""))
+        cand_away = _token_set(str(item.get("away_team") or ""))
+        if not cand_home or not cand_away:
+            continue
+        score_same = (_similarity(home_tokens, cand_home) + _similarity(away_tokens, cand_away)) / 2.0
+        score_swap = (_similarity(home_tokens, cand_away) + _similarity(away_tokens, cand_home)) / 2.0
+        score = max(score_same, score_swap)
+        if score > best_score:
+            best_score = score
+            best = item
+    return best if best_score >= 0.6 else None
 
 
 def _therundown_update_match_odds(match: dict, line_id: str, client: TheRundownClient) -> None:
@@ -295,6 +314,16 @@ STAT_ONLY_DC_CAP = float(os.environ.get("STAT_ONLY_DC_CAP", "0.70"))
 RISK_EXCLUDE_CUP = os.environ.get("RISK_EXCLUDE_CUP", "1") == "1"
 RISK_EXCLUDE_DERBY = os.environ.get("RISK_EXCLUDE_DERBY", "1") == "1"
 RISK_EXCLUDE_ROTATION = os.environ.get("RISK_EXCLUDE_ROTATION", "1") == "1"
+MIN_VALUE_EDGE = float(os.environ.get("MIN_VALUE_EDGE", "0.02"))
+MIN_EV = float(os.environ.get("MIN_EV", "0.0"))
+MIN_MODEL_PROB = float(os.environ.get("MIN_MODEL_PROB", "0.35"))
+ODDS_MIN = float(os.environ.get("ODDS_MIN", "1.6") or 0)
+ODDS_MAX = float(os.environ.get("ODDS_MAX", "0") or 0)
+MARKET_ALLOWLIST = {
+    item.strip()
+    for item in os.environ.get("MARKET_ALLOWLIST", "").split(",")
+    if item.strip()
+}
 
 def _build_http_session() -> requests.Session:
     session = requests.Session()
@@ -920,6 +949,30 @@ FDCO_UK_COMP_COLUMNS = {
     "goals_against": ("A", "GoalsAgainst"),
 }
 
+_COMP_NAME_TO_FD_CODE = {
+    "premier league": "PL",
+    "championship": "ELC",
+    "english championship": "ELC",
+    "la liga": "PD",
+    "laliga": "PD",
+    "primera division": "PD",
+    "serie a": "SA",
+    "bundesliga": "BL1",
+    "ligue 1": "FL1",
+    "eredivisie": "DED",
+    "primeira liga": "PPL",
+}
+
+
+def _comp_name_to_fd_code(name: str | None) -> str | None:
+    if not name:
+        return None
+    key = re.sub(r"[^a-z0-9\\s]", " ", str(name).lower()).strip()
+    key = re.sub(r"\\s+", " ", key)
+    if not key:
+        return None
+    return _COMP_NAME_TO_FD_CODE.get(key)
+
 _TEMPLATE_PATHS = [
     os.path.join(os.path.dirname(__file__), "data", "ui_template.html"),
     os.path.join(os.path.dirname(__file__), "data", "innovative_dashboard.html"),
@@ -1383,6 +1436,10 @@ def _load_weights() -> dict[str, object]:
                             defaults[key] = value
         except Exception:
             pass
+    adaptive = _load_adaptive_weights()
+    adaptive_weights = adaptive.get("weights") if isinstance(adaptive.get("weights"), dict) else None
+    if adaptive_weights:
+        defaults = _merge_adaptive_weights(defaults, adaptive_weights)
     _WEIGHTS_CACHE = defaults
     return defaults
 
@@ -2047,6 +2104,18 @@ def _normalize_team_name(name: str) -> str:
     return cleaned
 
 
+def _team_norm_match(team_norm: str, cand_norm: str) -> bool:
+    if not team_norm or not cand_norm:
+        return False
+    if team_norm == cand_norm:
+        return True
+    if len(cand_norm) >= 4 and cand_norm in team_norm:
+        return True
+    if len(team_norm) >= 4 and team_norm in cand_norm:
+        return True
+    return False
+
+
 def _sport_key_to_comp(sport_key: str) -> str | None:
     mapping = {
         "soccer_epl": "PL",
@@ -2154,6 +2223,11 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
         }
     team_norm = _normalize_team_name(team_name)
     comp_hint = _TEAM_COMP_HINT.get(team_norm)
+    if comp_hint:
+        mapped = _comp_name_to_fd_code(str(comp_hint))
+        if mapped:
+            comp_hint = mapped
+            _TEAM_COMP_HINT[team_norm] = mapped
     season_hint = _TEAM_SEASON_HINT.get(team_norm)
     cache_key = f"{team_norm}:{team_id or ''}"
     cached = _cache_get(_TEAM_SUMMARY_CACHE, cache_key, TEAM_SUMMARY_TTL_SECONDS)
@@ -2163,6 +2237,8 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
                 cached = None
             elif comp_hint or season_hint or team_id:
                 cached = None
+        if cached is not None and comp_hint and cached.get("table_entry") is None:
+            cached = None
         if cached is not None:
             return cached
     league_code = _fdco_league_code(comp_hint)
@@ -2185,6 +2261,35 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
     if table_entry is None and season_hint:
         standings = _fetch_standings_sportradar(season_hint)
         table_entry = _standings_highlight(standings, team_name, team_id if isinstance(team_id, str) else None)
+    if league_code is None:
+        for code in ("E0", "SC0", "D1", "I1", "SP1", "F1"):
+            fdco_matches, season_stats, corners_avg, cards_avg, table_entry = _fdco_team_season_stats(
+                team_name,
+                code,
+                season_year,
+                list_limit=5,
+            )
+            if season_stats:
+                recent = _calc_recent_rates(fdco_matches)
+                result = {
+                    "team": team_name,
+                    "win_rate": season_stats["win_rate"],
+                    "goals_for_avg": season_stats["goals_for_avg"],
+                    "btts_rate": season_stats["btts_rate"],
+                    "over25_rate": season_stats["over25_rate"],
+                    "season_win_rate": season_stats["win_rate"],
+                    "season_goals_for_avg": season_stats["goals_for_avg"],
+                    "season_btts_rate": season_stats["btts_rate"],
+                    "season_over25_rate": season_stats["over25_rate"],
+                    "recent_win_rate": recent.get("win_rate"),
+                    "recent_goals_for_avg": recent.get("goals_for_avg"),
+                    "corners_avg": corners_avg,
+                    "cards_avg": cards_avg,
+                    "source": "football-data.co.uk",
+                    "matches": fdco_matches[:5],
+                }
+                _cache_set(_TEAM_SUMMARY_CACHE, cache_key, result)
+                return result
     if season_hint and isinstance(team_id, str) and team_id.startswith("sr:competitor:"):
         stats = _fetch_competitor_stats_sportradar(season_hint, team_id)
         matches_played = stats.get("matches_played")
@@ -2474,12 +2579,51 @@ def _filter_picks_by_risk(picks: list[dict]) -> list[dict]:
     return safe if safe else picks
 
 
+def _passes_value_filters(pick: dict) -> bool:
+    if not pick:
+        return False
+    odds = pick.get("odds")
+    if not isinstance(odds, (int, float)) or odds <= 1.0:
+        return True
+    if MARKET_ALLOWLIST and pick.get("market_key") not in MARKET_ALLOWLIST:
+        return False
+    if ODDS_MIN > 0 and odds < ODDS_MIN:
+        return False
+    if ODDS_MAX > 0 and odds > ODDS_MAX:
+        return False
+    model_prob = pick.get("model_prob")
+    implied_prob = pick.get("implied_prob")
+    value = pick.get("value")
+    if not isinstance(value, (int, float)) and isinstance(model_prob, (int, float)) and isinstance(implied_prob, (int, float)):
+        value = model_prob - implied_prob
+    if isinstance(model_prob, (int, float)) and model_prob < MIN_MODEL_PROB:
+        return False
+    if isinstance(value, (int, float)) and value < MIN_VALUE_EDGE:
+        return False
+    ev = pick.get("ev")
+    if isinstance(ev, (int, float)) and ev < MIN_EV:
+        return False
+    return True
+
+
 def _enrich_pick(pick: dict) -> dict:
     if not pick:
         return pick
     if pick.get("sport_key", "").startswith("sr:competition:"):
         pick.setdefault("comp_code", pick.get("sport_key"))
     comp_hint = pick.get("fd_code") or pick.get("comp_code") or _sport_key_to_comp(pick.get("sport_key", ""))
+    comp_name = str(pick.get("competition") or pick.get("comp_name") or "")
+    if comp_hint:
+        mapped = _comp_name_to_fd_code(str(comp_hint))
+        if mapped:
+            comp_hint = mapped
+            pick["comp_code"] = comp_hint
+            pick["fd_code"] = comp_hint
+    if not comp_hint:
+        comp_hint = _comp_name_to_fd_code(comp_name)
+        if comp_hint:
+            pick["comp_code"] = comp_hint
+            pick["fd_code"] = comp_hint
     if comp_hint and pick.get("home_team") and pick.get("away_team"):
         _TEAM_COMP_HINT[_normalize_team_name(pick.get("home_team", ""))] = str(comp_hint)
         _TEAM_COMP_HINT[_normalize_team_name(pick.get("away_team", ""))] = str(comp_hint)
@@ -2511,14 +2655,74 @@ def _enrich_pick(pick: dict) -> dict:
     pick["away_standing"] = _standings_highlight(standings, pick.get("away_team", ""), pick.get("away_id"))
     pick["weather"] = _weather_details(pick.get("home_team", ""))
     _attach_sportradar_extras(pick)
-    if not pick.get("story"):
-        pick["story"] = _build_story(pick)
-    if not pick.get("model_prob"):
-        pick["model_prob"] = float(pick.get("score") or 0.0)
+    pick["story"] = _build_story(pick)
+    model_prob = pick.get("model_prob")
+    if not isinstance(model_prob, (int, float)):
+        model_prob = float(pick.get("score") or 0.0)
+    pick["model_prob"] = model_prob
     pick["confidence"] = _confidence_profile(pick)
     if "risk_flags" not in pick:
         pick["risk_flags"] = _pick_risk_flags(None, pick)
     return _ensure_pick_fields(pick)
+
+
+def _normalize_target_matches(
+    best_pick: dict | None,
+    target_matches: list[dict] | None,
+    best_combo: dict | None,
+    fallback_fixtures: list[dict] | None = None,
+    fallback_standings: dict[str, list[dict]] | None = None,
+    rss_items: list[dict] | None = None,
+    market_roi: dict[str, float] | None = None,
+) -> list[dict]:
+    """Ensure best_pick is first and return up to 2 picks if possible."""
+    picks: list[dict] = []
+    if best_combo and isinstance(best_combo, dict):
+        combo_matches = best_combo.get("matches") or []
+        if isinstance(combo_matches, list):
+            picks.extend(combo_matches)
+    if best_pick:
+        picks.append(best_pick)
+    if target_matches:
+        picks.extend(target_matches)
+
+    deduped: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for item in picks:
+        if not item:
+            continue
+        home = str(item.get("home_team") or "").strip().lower()
+        away = str(item.get("away_team") or "").strip().lower()
+        key = (home, away)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+        if len(deduped) >= 2:
+            break
+    if len(deduped) < 2 and fallback_fixtures is not None and fallback_standings is not None and market_roi is not None:
+        extra = _build_stat_only_picks(
+            fallback_fixtures,
+            fallback_standings,
+            rss_items or [],
+            market_roi,
+            24,
+        )
+        for item in extra:
+            if len(deduped) >= 2:
+                break
+            home = str(item.get("home_team") or "").strip().lower()
+            away = str(item.get("away_team") or "").strip().lower()
+            key = (home, away)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+    if len(deduped) < 2 and deduped:
+        dup = dict(deduped[0])
+        dup["outcome"] = str(dup.get("outcome") or "")
+        deduped.append(dup)
+    return deduped
 
 
 def _is_pick_complete(pick: dict) -> bool:
@@ -2577,6 +2781,7 @@ def _ensure_pick_fields(pick: dict | None) -> dict | None:
     pick.setdefault("value", 0.0)
     pick.setdefault("model_prob", 0.0)
     pick.setdefault("implied_prob", 0.0)
+    pick.setdefault("ev", 0.0)
     pick.setdefault("xg_diff", 0.0)
     pick.setdefault("lineup_diff", 0.0)
     pick.setdefault("news_score", 0.0)
@@ -2634,22 +2839,19 @@ def _placeholder_pick() -> dict:
     return _ensure_pick_fields(pick) or pick
 
 
-def _enforce_tip_presence(best_pick: dict | None, target_matches: list[dict]) -> tuple[dict, list[dict]]:
+def _enforce_tip_presence(best_pick: dict | None, target_matches: list[dict]) -> tuple[dict | None, list[dict]]:
     normalized_targets: list[dict] = []
     for item in target_matches:
         ensured = _ensure_pick_fields(item)
-        if ensured:
+        if ensured and ensured.get("match_key") != "placeholder":
             normalized_targets.append(ensured)
     best_pick = _ensure_pick_fields(best_pick)
+    if best_pick and best_pick.get("match_key") == "placeholder":
+        best_pick = None
     if normalized_targets and not best_pick:
         best_pick = normalized_targets[0]
-    if not normalized_targets:
-        placeholder = _placeholder_pick()
-        normalized_targets = [placeholder]
-        if not best_pick:
-            best_pick = placeholder
-    if not best_pick:
-        best_pick = _placeholder_pick()
+    if best_pick and not normalized_targets:
+        normalized_targets = [best_pick]
     return best_pick, normalized_targets
 
 
@@ -3303,7 +3505,9 @@ def _build_story(pick: dict) -> str:
         sentences.append(
             f"A valasztott piac a legmagasabb valoszinusegu opcio volt: {selection} ({market_label})."
         )
-    model_prob = pick.get("score")
+    model_prob = pick.get("model_prob")
+    if not isinstance(model_prob, (int, float)):
+        model_prob = pick.get("score")
     if isinstance(model_prob, (int, float)):
         sentences.append(f"Modell esely: {model_prob:.0%}.")
     missing_parts = []
@@ -3378,10 +3582,13 @@ def _build_picks_for_match(
                 "score": pick.score,
                 "risk": _risk_label(pick.score),
                 "explain_hu": pick.explanation_hu,
-                "model_prob": None,
-                "implied_prob": None,
+                "model_prob": pick.model_prob,
+                "implied_prob": pick.implied_prob,
+                "ev": pick.ev,
+                "value": pick.value,
             }
         )
+    picks = [item for item in picks if _passes_value_filters(item)]
     return picks
 
 
@@ -4852,6 +5059,61 @@ def _fdco_table_data(league_code: str, season_code: str) -> dict[str, dict[str, 
                 entry_key = key
                 entry[entry_key] = value
         table[norm] = entry
+    # If the CSV doesn't include table columns, derive standings from results.
+    if table and not any(entry.get("points") is not None or entry.get("position") is not None for entry in table.values()):
+        standings: dict[str, dict[str, object]] = {}
+        for row in rows:
+            home = str(row.get("HomeTeam") or "")
+            away = str(row.get("AwayTeam") or "")
+            if not home or not away:
+                continue
+            try:
+                home_goals = int(row.get("FTHG"))
+                away_goals = int(row.get("FTAG"))
+            except Exception:
+                continue
+            for team_name, gf, ga, is_home in (
+                (home, home_goals, away_goals, True),
+                (away, away_goals, home_goals, False),
+            ):
+                norm = _normalize_team_name(team_name)
+                entry = standings.setdefault(
+                    norm,
+                    {
+                        "team": team_name,
+                        "played": 0,
+                        "points": 0,
+                        "won": 0,
+                        "draw": 0,
+                        "lost": 0,
+                        "goals_for": 0,
+                        "goals_against": 0,
+                    },
+                )
+                entry["played"] = int(entry.get("played") or 0) + 1
+                entry["goals_for"] = int(entry.get("goals_for") or 0) + int(gf)
+                entry["goals_against"] = int(entry.get("goals_against") or 0) + int(ga)
+                if gf > ga:
+                    entry["won"] = int(entry.get("won") or 0) + 1
+                    entry["points"] = int(entry.get("points") or 0) + 3
+                elif gf == ga:
+                    entry["draw"] = int(entry.get("draw") or 0) + 1
+                    entry["points"] = int(entry.get("points") or 0) + 1
+                else:
+                    entry["lost"] = int(entry.get("lost") or 0) + 1
+        if standings:
+            ranked = sorted(
+                standings.values(),
+                key=lambda e: (
+                    -(int(e.get("points") or 0)),
+                    -((int(e.get("goals_for") or 0) - int(e.get("goals_against") or 0))),
+                    -(int(e.get("goals_for") or 0)),
+                    str(e.get("team") or ""),
+                ),
+            )
+            for idx, entry in enumerate(ranked, start=1):
+                entry["position"] = idx
+            table = { _normalize_team_name(entry.get("team") or ""): entry for entry in ranked if entry.get("team") }
     _cache_set(_FDCO_TABLE_CACHE, cache_key, table)
     return table
 
@@ -4869,7 +5131,9 @@ def _fdco_team_summary(team_name: str, league_code: str, season_year: int, limit
         away = str(row.get("AwayTeam") or "")
         if not home or not away:
             continue
-        if _normalize_team_name(home) != team_norm and _normalize_team_name(away) != team_norm:
+        home_norm = _normalize_team_name(home)
+        away_norm = _normalize_team_name(away)
+        if not _team_norm_match(team_norm, home_norm) and not _team_norm_match(team_norm, away_norm):
             continue
         date_raw = str(row.get("Date") or "")
         date_dt = _fdco_parse_date(date_raw)
@@ -4881,7 +5145,7 @@ def _fdco_team_summary(team_name: str, league_code: str, season_year: int, limit
             away_goals = int(away_goals)
         except Exception:
             continue
-        is_home = _normalize_team_name(home) == team_norm
+        is_home = _team_norm_match(team_norm, home_norm)
         gf = home_goals if is_home else away_goals
         ga = away_goals if is_home else home_goals
         if gf > ga:
@@ -4925,7 +5189,13 @@ def _fdco_team_summary(team_name: str, league_code: str, season_year: int, limit
     cards_values = [m["cards"] for m in matches if m.get("cards") is not None]
     corners_avg = sum(corners_values) / len(corners_values) if corners_values else None
     cards_avg = sum(cards_values) / len(cards_values) if cards_values else None
-    table_entry = _fdco_table_data(league_code, season_code).get(team_norm)
+    table = _fdco_table_data(league_code, season_code)
+    table_entry = table.get(team_norm)
+    if table_entry is None:
+        for key, entry in table.items():
+            if _team_norm_match(team_norm, key):
+                table_entry = entry
+                break
     return matches, corners_avg, cards_avg, table_entry
 
 
@@ -4953,7 +5223,9 @@ def _fdco_team_season_stats(
         away = str(row.get("AwayTeam") or "")
         if not home or not away:
             continue
-        if _normalize_team_name(home) != team_norm and _normalize_team_name(away) != team_norm:
+        home_norm = _normalize_team_name(home)
+        away_norm = _normalize_team_name(away)
+        if not _team_norm_match(team_norm, home_norm) and not _team_norm_match(team_norm, away_norm):
             continue
         date_raw = str(row.get("Date") or "")
         date_dt = _fdco_parse_date(date_raw)
@@ -4965,7 +5237,7 @@ def _fdco_team_season_stats(
             away_goals = int(away_goals)
         except Exception:
             continue
-        is_home = _normalize_team_name(home) == team_norm
+        is_home = _team_norm_match(team_norm, home_norm)
         gf = home_goals if is_home else away_goals
         ga = away_goals if is_home else home_goals
         if gf > ga:
@@ -5018,7 +5290,13 @@ def _fdco_team_season_stats(
     list_matches = matches[:list_limit] if list_limit > 0 else matches
     corners_avg = sum(corners_values) / len(corners_values) if corners_values else None
     cards_avg = sum(cards_values) / len(cards_values) if cards_values else None
-    table_entry = _fdco_table_data(league_code, season_code).get(team_norm)
+    table = _fdco_table_data(league_code, season_code)
+    table_entry = table.get(team_norm)
+    if table_entry is None:
+        for key, entry in table.items():
+            if _team_norm_match(team_norm, key):
+                table_entry = entry
+                break
     if total <= 0:
         return list_matches, None, corners_avg, cards_avg, table_entry
     stats = {
@@ -5173,6 +5451,8 @@ def _stat_pick_for_match(
         stats=None,
         events=None,
     )
+    # Ha nincs odds, ne valassz Dupla esely piacot.
+    picks = [p for p in picks if p.market.lower() != "dupla esely"]
     best = max(picks, key=lambda p: p.score)
     market_key = _market_key_from_pick(best.market)
     pick = {
@@ -5197,8 +5477,10 @@ def _stat_pick_for_match(
         "score": best.score,
         "risk": _risk_label(best.score),
         "explain_hu": best.explanation_hu,
-        "model_prob": None,
-        "implied_prob": None,
+        "model_prob": best.model_prob,
+        "implied_prob": best.implied_prob,
+        "ev": best.ev,
+        "value": best.value,
     }
     pick["risk_flags"] = _pick_risk_flags(match, pick)
     if pick["risk_flags"]:
@@ -5213,6 +5495,7 @@ def _build_stat_only_picks(
     standings_by_comp: dict[str, list[dict]],
     news_items: list[dict],
     roi_map: dict[str, float],
+    window_hours: int = 24,
 ) -> list[dict]:
     now = datetime.now(BUDAPEST_TZ)
     filtered: list[dict] = []
@@ -5221,7 +5504,7 @@ def _build_stat_only_picks(
         if not match_dt:
             continue
         match_local = match_dt.astimezone(BUDAPEST_TZ)
-        if _within_next_24h(match_local, now):
+        if match_local >= now and match_local < (now + timedelta(hours=window_hours)):
             filtered.append(match)
     if not filtered:
         return []
@@ -5229,7 +5512,19 @@ def _build_stat_only_picks(
     weights = _load_weights()
     picks: list[dict] = []
     for match in fixtures:
-        comp_code = match.get("comp_code") or match.get("sport_key", "")
+        comp_code = match.get("comp_code") or match.get("fd_code") or match.get("sport_key", "")
+        if comp_code:
+            mapped = _comp_name_to_fd_code(str(comp_code))
+            if mapped:
+                comp_code = mapped
+                match["comp_code"] = mapped
+                match["fd_code"] = mapped
+        if not comp_code:
+            comp_name = str(match.get("comp_name") or match.get("competition") or "")
+            comp_code = _comp_name_to_fd_code(comp_name) or ""
+            if comp_code:
+                match["comp_code"] = comp_code
+                match["fd_code"] = comp_code
         comp_standings = standings_by_comp.get(comp_code, [])
         table_scores = _table_scores_from_standings(comp_standings)
         if comp_code:
@@ -5250,7 +5545,19 @@ def _build_stat_only_picks(
             key = _match_key(match)
             if key in existing_keys:
                 continue
-            comp_code = match.get("comp_code") or match.get("sport_key", "")
+            comp_code = match.get("comp_code") or match.get("fd_code") or match.get("sport_key", "")
+            if comp_code:
+                mapped = _comp_name_to_fd_code(str(comp_code))
+                if mapped:
+                    comp_code = mapped
+                    match["comp_code"] = mapped
+                    match["fd_code"] = mapped
+            if not comp_code:
+                comp_name = str(match.get("comp_name") or match.get("competition") or "")
+                comp_code = _comp_name_to_fd_code(comp_name) or ""
+                if comp_code:
+                    match["comp_code"] = comp_code
+                    match["fd_code"] = comp_code
             comp_standings = standings_by_comp.get(comp_code, [])
             table_scores = _table_scores_from_standings(comp_standings)
             fallback_pick = _stat_pick_for_match(match, comp_standings, table_scores, news_items, weights, roi_map)
@@ -5304,6 +5611,7 @@ def _fetch_public_fixtures(
     fixtures.extend(_fetch_upcoming_fixtures_api_football(config.api_football_key, window_hours))
     fixtures.extend(_fetch_upcoming_fixtures_sportradar(config.sportradar_api_key, window_hours, SR_MAX_FIXTURES))
     fixtures = _dedupe_fixtures(fixtures)
+    raw_fixtures = fixtures[:]
     if SR_ENABLE_PROB and config.sportradar_api_key:
         has_sr = any(str(item.get("id") or "").startswith("sr:sport_event:") for item in fixtures)
         if has_sr:
@@ -5317,7 +5625,9 @@ def _fetch_public_fixtures(
     fixtures = [
         item
         for item in fixtures
-        if (dt := _parse_match_dt(item)) and _within_next_24h(dt.astimezone(BUDAPEST_TZ), now)
+        if (dt := _parse_match_dt(item))
+        and (local := dt.astimezone(BUDAPEST_TZ)) >= now
+        and local < (now + timedelta(hours=window_hours))
     ]
     if allowed_codes or allowed_pairs:
         filtered = []
@@ -5358,6 +5668,8 @@ def _fetch_public_fixtures(
             if _allowed_comp_match(comp_name, comp_country):
                 filtered.append(item)
         fixtures = filtered
+    if not fixtures:
+        fixtures = raw_fixtures
     if allowed_codes:
         comp_codes: list[str] = []
         for item in fixtures:
@@ -5501,14 +5813,19 @@ def _stake_from_score(score: float | None, roi: float | None = None) -> float | 
 
 
 def _build_best_combo(picks: list[dict], target: float) -> dict | None:
+    picks = [item for item in picks if isinstance(item.get("odds"), (int, float)) and item.get("odds") > 1.01]
     picks = sorted(picks, key=lambda item: item["score"], reverse=True)[:30]
     best = None
+    nearest = None
     for i in range(len(picks)):
         for j in range(i + 1, len(picks)):
             if picks[i].get("match_key") == picks[j].get("match_key"):
                 continue
             score, combined_odds = _combine_score(picks[i], picks[j], target)
             if not (1.85 <= combined_odds <= 2.15):
+                distance = abs(combined_odds - target)
+                if nearest is None or distance < nearest[0]:
+                    nearest = (distance, combined_odds, score, picks[i], picks[j])
                 continue
             combo = {
                 "matches": [picks[i], picks[j]],
@@ -5521,20 +5838,10 @@ def _build_best_combo(picks: list[dict], target: float) -> dict | None:
                 best = combo
     if best:
         return best
-    fallback = []
-    used = set()
-    for pick in picks:
-        key = pick.get("match_key")
-        if key in used:
-            continue
-        fallback.append(pick)
-        used.add(key)
-        if len(fallback) == 2:
-            break
-    if len(fallback) == 2:
-        score, combined_odds = _combine_score(fallback[0], fallback[1], target)
+    if nearest:
+        _, combined_odds, score, left, right = nearest
         return {
-            "matches": fallback,
+            "matches": [left, right],
             "combined_odds": combined_odds,
             "score": score,
             "risk": _risk_label(score),
@@ -5793,6 +6100,7 @@ def _settle_saved_picks(db, api_key: str) -> None:
     for sport_key, picks in pending_by_sport.items():
         scores = _fetch_scores(api_key, sport_key, days_from=3)
         result_map: dict[tuple[str, str, str], tuple[int, int]] = {}
+        result_map_day: dict[tuple[str, str, str], tuple[int, int]] = {}
         for match in scores:
             if not match.get("completed"):
                 continue
@@ -5804,10 +6112,13 @@ def _settle_saved_picks(db, api_key: str) -> None:
             result = _result_from_scores(match)
             if result:
                 result_map[(str(commence_time), str(home_team), str(away_team))] = result
+                result_map_day[(str(commence_time)[:10], str(home_team), str(away_team))] = result
 
         for row in picks:
             pick_id, _, commence_time, home_team, away_team, market_key, outcome, line = row
             result = result_map.get((str(commence_time), str(home_team), str(away_team)))
+            if not result:
+                result = result_map_day.get((str(commence_time)[:10], str(home_team), str(away_team)))
             if not result:
                 continue
             home_goals, away_goals = result
@@ -5825,25 +6136,35 @@ def _settle_saved_picks(db, api_key: str) -> None:
 
 def _save_pick(db, payload: dict) -> None:
     now = datetime.now(timezone.utc).isoformat()
+    odds_val = float(payload.get("odds", 0.0) or 0.0)
+    has_odds = 1 if odds_val > 1.01 else 0
+    source = payload.get("source")
+    if not source:
+        source = "odds" if has_odds else "no_odds"
+    day_key = payload.get("day_key") or datetime.now(BUDAPEST_TZ).strftime("%Y-%m-%d")
+    commence_time = payload.get("commence_time") or day_key
     db.connection.execute(
         """
-        INSERT INTO saved_picks
-        (created_at, sport_key, commence_time, home_team, away_team, market_key, outcome, line, odds, score, risk, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT OR IGNORE INTO saved_picks
+        (created_at, sport_key, commence_time, home_team, away_team, market_key, outcome, line, odds, score, risk, status, source, has_odds, day_key)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             now,
             payload.get("sport_key", ""),
-            payload.get("commence_time", ""),
+            commence_time,
             payload.get("home_team", ""),
             payload.get("away_team", ""),
             payload.get("market_key", ""),
             payload.get("outcome", ""),
             payload.get("line"),
-            float(payload.get("odds", 0.0)),
+            odds_val,
             float(payload.get("score", 0.0)),
             payload.get("risk", "yellow"),
             "pending",
+            source,
+            has_odds,
+            day_key,
         ),
     )
     db.connection.commit()
@@ -5852,7 +6173,7 @@ def _save_pick(db, payload: dict) -> None:
 def _list_saved_picks(db) -> list[dict]:
     cursor = db.connection.execute(
         """
-        SELECT created_at, home_team, away_team, market_key, outcome, odds, status, result
+        SELECT created_at, home_team, away_team, market_key, outcome, odds, status, result, source, day_key
         FROM saved_picks
         ORDER BY created_at DESC
         LIMIT 100
@@ -5860,7 +6181,7 @@ def _list_saved_picks(db) -> list[dict]:
     )
     rows = cursor.fetchall()
     results = []
-    for created_at, home_team, away_team, market_key, outcome, odds, status, result in rows:
+    for created_at, home_team, away_team, market_key, outcome, odds, status, result, source, day_key in rows:
         if result == "win":
             result_label = "nyert"
         elif result == "lose":
@@ -5880,9 +6201,37 @@ def _list_saved_picks(db) -> list[dict]:
                 "odds": float(odds),
                 "status": status,
                 "result_label": result_label,
+                "source": str(source or ""),
+                "day_key": str(day_key or ""),
             }
         )
     return results
+
+
+def _auto_save_picks(db, picks: list[dict]) -> None:
+    if not picks:
+        return
+    day_key = datetime.now(BUDAPEST_TZ).strftime("%Y-%m-%d")
+    for pick in picks[:2]:
+        if not pick:
+            continue
+        commence_time = pick.get("commence_time") or ""
+        payload = {
+            "sport_key": pick.get("sport_key", ""),
+            "commence_time": commence_time or day_key,
+            "home_team": pick.get("home_team", ""),
+            "away_team": pick.get("away_team", ""),
+            "market_key": pick.get("market_key", ""),
+            "outcome": pick.get("outcome", ""),
+            "line": pick.get("line"),
+            "odds": pick.get("odds", 0.0),
+            "score": pick.get("score", 0.0),
+            "risk": pick.get("risk", "yellow"),
+            "source": "odds" if isinstance(pick.get("odds"), (int, float)) and pick.get("odds") > 1.01 else "no_odds",
+            "day_key": day_key,
+        }
+        _save_pick(db, payload)
+    _update_learning_weights(db)
 
 
 def _saved_picks_summary(picks: list[dict]) -> dict[str, object]:
@@ -5936,6 +6285,168 @@ def _saved_picks_summary_range(picks: list[dict], days: int) -> dict[str, object
         if dt >= cutoff:
             filtered.append(pick)
     return _saved_picks_summary(filtered)
+
+
+def _saved_picks_summary_by_source(db) -> dict[str, dict[str, object]]:
+    cursor = db.connection.execute(
+        """
+        SELECT source, odds, result
+        FROM saved_picks
+        WHERE status = 'settled'
+        """
+    )
+    rows = cursor.fetchall()
+    by_source: dict[str, list[dict]] = {}
+    for source, odds, result in rows:
+        by_source.setdefault(str(source or "unknown"), []).append(
+            {"odds": odds, "result_label": "nyert" if result == "win" else ("vesztett" if result == "lose" else "visszajaro")}
+        )
+    summary = {}
+    for source, picks in by_source.items():
+        summary[source] = _saved_picks_summary(picks)
+    return summary
+
+
+def _daily_roi_series(db, days: int = 30) -> dict[str, list[dict]]:
+    start_day = datetime.now(BUDAPEST_TZ).date().isoformat()
+    cursor = db.connection.execute(
+        """
+        SELECT day_key, source, odds, result
+        FROM saved_picks
+        WHERE status = 'settled' AND day_key >= ?
+        """,
+        (start_day,),
+    )
+    rows = cursor.fetchall()
+    agg: dict[tuple[str, str], dict[str, float]] = {}
+    for day_key, source, odds, result in rows:
+        day = str(day_key or "")
+        src = str(source or "unknown")
+        key = (day, src)
+        entry = agg.setdefault(key, {"profit": 0.0, "settled": 0.0})
+        try:
+            odds_val = float(odds)
+        except Exception:
+            odds_val = 0.0
+        if result == "win":
+            entry["profit"] += max(0.0, odds_val - 1.0)
+            entry["settled"] += 1.0
+        elif result == "lose":
+            entry["profit"] -= 1.0
+            entry["settled"] += 1.0
+        elif result == "push":
+            entry["settled"] += 1.0
+    series: dict[str, list[dict]] = {"odds": [], "no_odds": []}
+    for (day, src), entry in sorted(agg.items()):
+        settled = entry.get("settled", 0.0)
+        roi = (entry.get("profit", 0.0) / settled) if settled else 0.0
+        bucket = "odds" if src == "odds" else "no_odds"
+        series[bucket].append({"day": day, "roi": roi, "settled": int(settled)})
+    return series
+
+
+def _market_roi_by_source(db) -> dict[str, dict[str, float]]:
+    cursor = db.connection.execute(
+        """
+        SELECT source, market_key, odds, result
+        FROM saved_picks
+        WHERE status = 'settled'
+        """
+    )
+    rows = cursor.fetchall()
+    stats: dict[str, dict[str, dict[str, float]]] = {}
+    for source, market_key, odds, result in rows:
+        source_key = str(source or "unknown")
+        market = str(market_key or "")
+        entry = stats.setdefault(source_key, {}).setdefault(market, {"profit": 0.0, "settled": 0.0})
+        try:
+            odds_val = float(odds)
+        except Exception:
+            odds_val = 0.0
+        if result == "win":
+            entry["profit"] += max(0.0, odds_val - 1.0)
+            entry["settled"] += 1.0
+        elif result == "lose":
+            entry["profit"] -= 1.0
+            entry["settled"] += 1.0
+        elif result == "push":
+            entry["settled"] += 1.0
+    out: dict[str, dict[str, float]] = {}
+    for source_key, markets in stats.items():
+        out[source_key] = {}
+        for market, entry in markets.items():
+            settled = entry.get("settled", 0.0)
+            out[source_key][market] = (entry.get("profit", 0.0) / settled) if settled else 0.0
+    return out
+
+
+def _load_adaptive_weights() -> dict[str, object]:
+    path = _DATA_DIR / "adaptive_weights.json"
+    try:
+        if path.exists():
+            with path.open("r", encoding="utf-8") as handle:
+                data = json.load(handle)
+                if isinstance(data, dict):
+                    return data
+    except Exception:
+        pass
+    return {"weights": _load_weights(), "updated_at": ""}
+
+
+def _save_adaptive_weights(payload: dict) -> None:
+    try:
+        _DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with (_DATA_DIR / "adaptive_weights.json").open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=True, indent=2)
+    except Exception:
+        pass
+
+
+def _apply_aggressive_learning(final_weights: dict[str, float], roi_map: dict[str, float]) -> dict[str, float]:
+    updated = dict(final_weights)
+    lr = float(os.environ.get("AGGRESSIVE_LR", "0.25"))
+    for key in ("value", "prob", "news"):
+        roi = float(roi_map.get(key, 0.0))
+        bump = max(-0.2, min(0.2, roi * lr))
+        updated[key] = max(0.05, min(0.85, updated.get(key, 0.2) + bump))
+    total = sum(updated.values()) or 1.0
+    for key in list(updated.keys()):
+        updated[key] = updated[key] / total
+    return updated
+
+
+def _merge_adaptive_weights(base: dict[str, object], adaptive: dict[str, object]) -> dict[str, object]:
+    merged = dict(base)
+    for key in ("final", "final_market", "market_overrides", "model", "model_market"):
+        if key in adaptive and isinstance(adaptive.get(key), dict):
+            if key not in merged or not isinstance(merged.get(key), dict):
+                merged[key] = {}
+            if key in {"final", "model"}:
+                merged[key].update(adaptive[key])
+                continue
+            for sub_key, sub_val in adaptive[key].items():
+                if isinstance(sub_val, dict):
+                    entry = merged[key].get(sub_key, {})
+                    if not isinstance(entry, dict):
+                        entry = {}
+                    entry.update(sub_val)
+                    merged[key][sub_key] = entry
+                else:
+                    merged[key][sub_key] = sub_val
+    return merged
+
+
+def _update_learning_weights(db) -> dict[str, object]:
+    base = _load_adaptive_weights()
+    weights = base.get("weights") if isinstance(base.get("weights"), dict) else {}
+    market_roi = _market_roi_by_source(db)
+    odds_roi = market_roi.get("odds", {})
+    if odds_roi:
+        final_weights = dict(weights.get("final", {"value": 0.5, "prob": 0.3, "news": 0.2}))
+        weights["final"] = _apply_aggressive_learning(final_weights, odds_roi)
+    payload = {"weights": weights, "updated_at": datetime.now(timezone.utc).isoformat()}
+    _save_adaptive_weights(payload)
+    return payload
 
 
 def _market_roi_map(db) -> dict[str, float]:
@@ -5996,6 +6507,10 @@ def _store_cached_picks(db, payload: dict) -> None:
         (_CACHE_KEY, json.dumps(payload), now),
     )
     db.connection.commit()
+
+
+def _is_placeholder_pick(pick: dict | None) -> bool:
+    return isinstance(pick, dict) and pick.get("match_key") == "placeholder"
 
 
 def _persist_pick_snapshot(
@@ -6153,6 +6668,21 @@ def dashboard():
             _trigger_refresh_async()
         with _RESPONSE_LOCK:
             html = _RESPONSE_CACHE.get("html", "")
+        if html and _LAST_PAYLOAD:
+            comps = _LAST_PAYLOAD.get("competitions") or []
+            no_odds = _LAST_PAYLOAD.get("target_matches_no_odds") or []
+            best_pick = _LAST_PAYLOAD.get("best_pick") or {}
+            if _is_placeholder_pick(best_pick):
+                _render_and_cache(force=True)
+                with _RESPONSE_LOCK:
+                    html = _RESPONSE_CACHE.get("html", "")
+            elif not comps or not no_odds:
+                with app.app_context():
+                    context, _ = _render_dashboard("tips", refresh_requested=False, render=False, force_refresh=False)
+                    html = render_template_string(_get_template(), **context)
+                with _RESPONSE_LOCK:
+                    _RESPONSE_CACHE["html"] = html
+                    _RESPONSE_CACHE["ts"] = time.time()
         if not html:
             html = (
                 "<html><head><meta http-equiv=\"refresh\" content=\"5\"></head>"
@@ -6195,10 +6725,14 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
     cached = _load_cached_picks(db)
     market_roi = _market_roi_map(db)
     cached_updated_at = cached.get("updated_at") if cached else None
+    placeholder_refresh = False
     if cached and cached_updated_at:
         cached_dt = _parse_iso_datetime(cached_updated_at)
         if cached_dt and not _same_local_day(cached_dt, BUDAPEST_TZ):
             refresh_requested = True
+    if cached and _is_placeholder_pick(cached.get("best_pick")):
+        refresh_requested = True
+        placeholder_refresh = True
     if not refresh_requested:
         if not cached:
             refresh_requested = True
@@ -6208,13 +6742,13 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                 age = (datetime.now(timezone.utc) - cached_dt).total_seconds()
                 if age >= AUTO_REFRESH_SECONDS:
                     refresh_requested = True
-    if refresh_requested and not force_refresh and cached_updated_at and REFRESH_COOLDOWN_SECONDS > 0:
+    if refresh_requested and not force_refresh and not placeholder_refresh and cached_updated_at and REFRESH_COOLDOWN_SECONDS > 0:
         cached_dt = _parse_iso_datetime(cached_updated_at)
         if cached_dt:
             age = (datetime.now(timezone.utc) - cached_dt).total_seconds()
             if age < REFRESH_COOLDOWN_SECONDS:
                 refresh_requested = False
-    if refresh_requested and not force_refresh and cached_updated_at and MIN_API_REFRESH_SECONDS > 0:
+    if refresh_requested and not force_refresh and not placeholder_refresh and cached_updated_at and MIN_API_REFRESH_SECONDS > 0:
         cached_dt = _parse_iso_datetime(cached_updated_at)
         if cached_dt:
             age = (datetime.now(timezone.utc) - cached_dt).total_seconds()
@@ -6243,13 +6777,16 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
     ]
     recent_matches = []
     standings = []
-    if not FAST_MODE:
-        competitions = _fetch_competitions_fd(config.football_data_token)
-    if not competitions:
+    if cached and not refresh_requested and not force_refresh:
         competitions = fallback_competitions
+    else:
+        if not FAST_MODE:
+            competitions = _fetch_competitions_fd(config.football_data_token)
+        if not competitions:
+            competitions = fallback_competitions
     allowed_codes = {str(comp.get("code") or "") for comp in competitions if comp.get("code")}
     primary = _primary_competition(competitions)
-    if primary:
+    if primary and not (cached and not refresh_requested and not force_refresh):
         recent_matches = _fetch_recent_matches_fd(config.football_data_token, primary)
         standings = _fetch_standings_fd(config.football_data_token, primary)
 
@@ -6294,14 +6831,6 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                     cache.set(date_str, "therundown_events", events_cache)
                 else:
                     refresh_requested = False
-                    events_cache = []
-                    for sport_id in _therundown_sport_ids():
-                        try:
-                            events_cache.extend(td_client.events_for_date(sport_id, date_str))
-                            events_cache.extend(td_client.events_for_date(sport_id, date_str_next))
-                        except Exception as exc:
-                            td_logger.warning("TheRundown events fetch failed: %s", exc)
-                    cache.set(date_str, "therundown_events", events_cache)
                 therundown_events = list(events_cache or [])
                 for event in therundown_events:
                     teams = td_client.event_teams(event)
@@ -6339,8 +6868,8 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                             home_tokens |= _token_set(name)
                         if item.get("is_away"):
                             away_tokens |= _token_set(name)
-                    payload["home_tokens"] = home_tokens
-                    payload["away_tokens"] = away_tokens
+                    payload["home_tokens"] = sorted(home_tokens)
+                    payload["away_tokens"] = sorted(away_tokens)
                     therundown_candidates.append(payload)
                 cache.set(date_str, "therundown_event_map", therundown_map)
                 use_therundown = bool(therundown_map)
@@ -6451,6 +6980,75 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                             }
                             for match in fallback_matches[:8]
                         ]
+                if not eligible:
+                    fixtures, standings_by_comp = _fetch_public_fixtures(competitions, window_hours)
+                    if fixtures:
+                        rss_team_names = []
+                        for item in fixtures:
+                            home = item.get("home_team")
+                            away = item.get("away_team")
+                            if home:
+                                rss_team_names.append(str(home))
+                            if away:
+                                rss_team_names.append(str(away))
+                        rss_items = _fetch_rss_items(rss_team_names)
+                    else:
+                        rss_items = []
+                    picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items, market_roi)
+                    if not picks:
+                        fallback_hours = 168
+                        fixtures, standings_by_comp = _fetch_public_fixtures(competitions, fallback_hours)
+                        if fixtures:
+                            rss_team_names = []
+                            for item in fixtures:
+                                home = item.get("home_team")
+                                away = item.get("away_team")
+                                if home:
+                                    rss_team_names.append(str(home))
+                                if away:
+                                    rss_team_names.append(str(away))
+                            rss_items = _fetch_rss_items(rss_team_names)
+                        else:
+                            rss_items = []
+                        picks = _build_stat_only_picks(fixtures, standings_by_comp, rss_items, market_roi, fallback_hours)
+                        if picks:
+                            odds_error = "TheRundown odds nincs (stat-only fallback)"
+                    if not picks:
+                        api_fixtures = _fetch_upcoming_fixtures_api_football(config.api_football_key, window_hours)
+                        if api_fixtures:
+                            rss_team_names = []
+                            for item in api_fixtures:
+                                home = item.get("home_team")
+                                away = item.get("away_team")
+                                if home:
+                                    rss_team_names.append(str(home))
+                                if away:
+                                    rss_team_names.append(str(away))
+                            rss_items = _fetch_rss_items(rss_team_names) if rss_team_names else []
+                            picks = _build_stat_only_picks(api_fixtures, {}, rss_items, market_roi, 168)
+                    if not picks:
+                        sr_fixtures = _fetch_upcoming_fixtures_sportradar(config.sportradar_api_key, window_hours, SR_MAX_FIXTURES)
+                        if sr_fixtures:
+                            rss_team_names = []
+                            for item in sr_fixtures:
+                                home = item.get("home_team")
+                                away = item.get("away_team")
+                                if home:
+                                    rss_team_names.append(str(home))
+                                if away:
+                                    rss_team_names.append(str(away))
+                            rss_items = _fetch_rss_items(rss_team_names) if rss_team_names else []
+                            picks = _build_stat_only_picks(sr_fixtures, {}, rss_items, market_roi, 168)
+                    if not picks:
+                        odds_error = "Nincs elerheto meccs 24 oras ablakban"
+                    odds_count = 0
+                    best_pick, target_matches = _select_stat_picks(picks, limit=2)
+                    best_combo = None
+                    post_month, _ = _api_usage_counts()
+                    refresh_usage = {
+                        key: max(0, post_month.get(key, 0) - pre_month.get(key, 0))
+                        for key in set(pre_month) | set(post_month)
+                    }
             elif not config.odds_api_key:
                 odds_error = "Odds API kulcs hianyzik (odds nelkuli ajanlas)"
                 data = []
@@ -6489,7 +7087,7 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                         odds_error = "Odds API kulcs hianyzik (odds nelkuli ajanlas, 24 oras ablak)"
                 if not picks:
                     odds_error = "Nincs elerheto meccs 24 oras ablakban"
-                odds_count = len(picks)
+                odds_count = 0
                 best_pick, target_matches = _select_stat_picks(picks, limit=2)
                 best_combo = None
                 post_month, _ = _api_usage_counts()
@@ -6549,7 +7147,7 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                             odds_error = "Odds API adat nem elerheto (24 oras ablak)"
                     if not picks:
                         odds_error = "Nincs elerheto meccs 24 oras ablakban"
-                    odds_count = len(picks)
+                    odds_count = 0
                     best_pick, target_matches = _select_stat_picks(picks, limit=2)
                     best_combo = None
                     post_month, _ = _api_usage_counts()
@@ -6744,6 +7342,20 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
                 key: max(0, post_month.get(key, 0) - pre_month.get(key, 0))
                 for key in set(pre_month) | set(post_month)
             }
+            if _is_placeholder_pick(best_pick) and cached:
+                cached_best = cached.get("best_pick")
+                cached_targets = cached.get("target_matches") or []
+                if cached_best and not _is_placeholder_pick(cached_best):
+                    best_pick = _enrich_pick(cached_best)
+                    target_matches = [_enrich_pick(item) for item in cached_targets] if cached_targets else []
+                    odds_count = int(cached.get("odds_count", odds_count) or 0)
+                    odds_error = cached.get("odds_error", odds_error)
+                    odds_pool_matches = cached.get("odds_pool_matches", odds_pool_matches) or odds_pool_matches
+            if _is_placeholder_pick(best_pick):
+                fallback_fixtures, fallback_standings = _fetch_public_fixtures(competitions, window_hours)
+                fallback_picks = _build_stat_only_picks(fallback_fixtures, fallback_standings, rss_items, market_roi)
+                if fallback_picks:
+                    best_pick, target_matches = _select_stat_picks(fallback_picks, limit=2)
             _store_cached_picks(
                 db,
                 {
@@ -6786,6 +7398,79 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
             best_pick, target_matches = _enforce_tip_presence(cached.get("best_pick"), raw_target_matches)
             best_pick = _enrich_pick(best_pick) if best_pick else None
             target_matches = [_enrich_pick(item) for item in target_matches] if target_matches else []
+    fallback_fixtures, fallback_standings = _fetch_public_fixtures(competitions, 24)
+    target_matches = _normalize_target_matches(
+        best_pick,
+        target_matches,
+        best_combo,
+        fallback_fixtures,
+        fallback_standings,
+        rss_items,
+        market_roi,
+    )
+    if not best_pick and odds_pool_matches:
+        pseudo = []
+        live_fixtures, live_standings = _fetch_public_fixtures(competitions, 24)
+        for item in odds_pool_matches:
+            home = item.get("home_team")
+            away = item.get("away_team")
+            match = None
+            if home and away:
+                home_norm = _normalize_team_name(home)
+                away_norm = _normalize_team_name(away)
+                match = next(
+                    (
+                        m
+                        for m in live_fixtures
+                        if _normalize_team_name(m.get("home_team", "")) == home_norm
+                        and _normalize_team_name(m.get("away_team", "")) == away_norm
+                    ),
+                    None,
+                )
+                if not match:
+                    match = _best_fixture_match(home, away, live_fixtures)
+            comp_name = ""
+            if match and match.get("competition"):
+                comp_name = _match_competition(match)
+            if not comp_name:
+                comp_name = str(item.get("competition") or "")
+            comp_code = match.get("comp_code") if match else ""
+            if not comp_code:
+                comp_code = _comp_name_to_fd_code(comp_name) or ""
+            pseudo.append(
+                {
+                    "home_team": home,
+                    "away_team": away,
+                    "competition": (match.get("competition") if match else item.get("competition")),
+                    "comp_code": comp_code,
+                    "fd_code": (match.get("fd_code") if match else comp_code),
+                    "sport_key": (match.get("sport_key") if match else ""),
+                    "home_id": (match.get("home_id") if match else None),
+                    "away_id": (match.get("away_id") if match else None),
+                    "season": (match.get("season") if match else None),
+                    "sr_season_id": (match.get("sr_season_id") if match else None),
+                    "commence_time": (match.get("commence_time") if match else item.get("commence_time") or ""),
+                }
+            )
+        standings_source = live_standings if live_standings else {}
+        pseudo_picks = _build_stat_only_picks(pseudo, standings_source, rss_items, market_roi, 24)
+        if pseudo_picks:
+            best_pick, target_matches = _select_stat_picks(pseudo_picks, limit=2)
+            target_matches = _normalize_target_matches(
+                best_pick,
+                target_matches,
+                best_combo,
+                fallback_fixtures,
+                fallback_standings,
+                rss_items,
+                market_roi,
+            )
+    if _is_placeholder_pick(best_pick):
+        fallback_fixtures, fallback_standings = _fetch_public_fixtures(competitions, 168)
+        fallback_picks = _build_stat_only_picks(fallback_fixtures, fallback_standings, rss_items, market_roi, 168)
+        if fallback_picks:
+            best_pick, target_matches = _select_stat_picks(fallback_picks, limit=2)
+            target_matches = _normalize_target_matches(best_pick, target_matches, best_combo)
     saved_picks = _list_saved_picks(db)
     saved_summary = _saved_picks_summary(saved_picks)
     saved_summary_15d = _saved_picks_summary_range(saved_picks, 15)
@@ -6793,6 +7478,7 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
     saved_summary_60d = _saved_picks_summary_range(saved_picks, 60)
     saved_summary_90d = _saved_picks_summary_range(saved_picks, 90)
     saved_summary_180d = _saved_picks_summary_range(saved_picks, 180)
+    saved_by_source = _saved_picks_summary_by_source(db)
     stake_pct = _stake_from_score(best_pick.get("score") if best_pick else None, saved_summary_30d.get("roi"))
 
     configured_sources = ", ".join(sorted({item.get("label", "") for item in _load_rss_sources() if item.get("label")}))
@@ -6908,11 +7594,15 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
         )
     api_total = len(api_items)
     api_online = sum(1 for item in api_items if item.get("status") in {"ok"})
+    _auto_save_picks(db, target_matches or [])
     target_matches_odds = [pick for pick in (target_matches or []) if (pick.get("odds") or 0) > 1.01]
-    if not target_matches_odds:
-        if target_matches and target_matches[0].get("odds") and target_matches[0].get("odds") > 1.01:
+    if not target_matches_odds and target_matches:
+        if target_matches[0].get("odds") and target_matches[0].get("odds") > 1.01:
             target_matches_odds = target_matches[:2]
     target_matches_no_odds = target_matches[:2] if target_matches else []
+    if not odds_pool_matches or not target_matches_odds:
+        odds_count = 0
+    daily_roi = _daily_roi_series(db)
     context = {
         "odds_configured": bool(config.odds_api_key),
         "football_configured": bool(config.football_data_token),
@@ -6942,6 +7632,8 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
         "saved_summary_60d": saved_summary_60d,
         "saved_summary_90d": saved_summary_90d,
         "saved_summary_180d": saved_summary_180d,
+        "saved_by_source": saved_by_source,
+        "daily_roi": daily_roi,
         "stake_pct": stake_pct,
         "diag_counts": diag_counts,
         "cached_updated_at": cached_updated_at,
@@ -6996,6 +7688,22 @@ def health():
         "time": datetime.now(timezone.utc).isoformat(),
         "fast_mode": FAST_MODE,
     }
+
+
+@app.route("/api/stats")
+def api_stats():
+    db = connect(config.db_url)
+    db.ensure_schema()
+    saved = _list_saved_picks(db)
+    return jsonify(
+        {
+            "summary_all": _saved_picks_summary(saved),
+            "summary_30d": _saved_picks_summary_range(saved, 30),
+            "summary_90d": _saved_picks_summary_range(saved, 90),
+            "by_source": _saved_picks_summary_by_source(db),
+            "daily_roi": _daily_roi_series(db),
+        }
+    )
 
 
 @app.route("/api/odds/<action>")
@@ -7068,6 +7776,85 @@ def save_pick():
         payload["line"] = None
     _save_pick(db, payload)
     return redirect(url_for("dashboard", tab="saved"))
+
+
+@app.route("/api/manual_pick", methods=["POST"])
+def api_manual_pick():
+    db = connect(config.db_url)
+    db.ensure_schema()
+    data = request.get_json(silent=True) or {}
+    payload = {
+        "sport_key": data.get("sport_key", ""),
+        "commence_time": data.get("commence_time", ""),
+        "home_team": data.get("home_team", ""),
+        "away_team": data.get("away_team", ""),
+        "market_key": data.get("market_key", ""),
+        "outcome": data.get("outcome", ""),
+        "line": data.get("line"),
+        "odds": data.get("odds", "0"),
+        "score": data.get("score", "0"),
+        "risk": data.get("risk", "yellow"),
+    }
+    try:
+        if payload["line"] is not None:
+            payload["line"] = float(payload["line"])
+    except Exception:
+        payload["line"] = None
+    _save_pick(db, payload)
+    return jsonify({"ok": True})
+
+
+def _find_saved_pick_id(db, payload: dict) -> int | None:
+    cursor = db.connection.execute(
+        """
+        SELECT id
+        FROM saved_picks
+        WHERE sport_key = ?
+          AND commence_time = ?
+          AND home_team = ?
+          AND away_team = ?
+          AND market_key = ?
+          AND outcome = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (
+            payload.get("sport_key", ""),
+            payload.get("commence_time", ""),
+            payload.get("home_team", ""),
+            payload.get("away_team", ""),
+            payload.get("market_key", ""),
+            payload.get("outcome", ""),
+        ),
+    )
+    row = cursor.fetchone()
+    return int(row[0]) if row else None
+
+
+@app.route("/api/manual_settle", methods=["POST"])
+def api_manual_settle():
+    db = connect(config.db_url)
+    db.ensure_schema()
+    data = request.get_json(silent=True) or {}
+    pick_id = data.get("id")
+    result = str(data.get("result") or "").strip().lower()
+    if result not in {"win", "lose", "push"}:
+        return jsonify({"error": "result must be win/lose/push"}), 400
+    if pick_id is None:
+        pick_id = _find_saved_pick_id(db, data)
+    if pick_id is None:
+        return jsonify({"error": "pick not found"}), 404
+    now = datetime.now(timezone.utc).isoformat()
+    db.connection.execute(
+        """
+        UPDATE saved_picks
+        SET status = ?, settled_at = ?, result = ?
+        WHERE id = ?
+        """,
+        ("settled", now, result, int(pick_id)),
+    )
+    db.connection.commit()
+    return jsonify({"ok": True, "id": int(pick_id)})
 
 if __name__ == '__main__':
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
