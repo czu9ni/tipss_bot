@@ -6390,7 +6390,8 @@ def _load_adaptive_weights() -> dict[str, object]:
                     return data
     except Exception:
         pass
-    return {"weights": _load_weights(), "updated_at": ""}
+    # Avoid recursion with _load_weights when the adaptive file is missing.
+    return {"weights": {}, "updated_at": ""}
 
 
 def _save_adaptive_weights(payload: dict) -> None:
@@ -6660,12 +6661,30 @@ def _fetch_odds_matches(api_key: str, keys: list[str] | None = None) -> tuple[li
 
 @app.route('/')
 def dashboard():
+    global _LAST_PAYLOAD
     t0 = time.perf_counter()
     try:
         if request.args.get("refresh") == "1":
             _render_and_cache(force=True)
         elif not _RESPONSE_CACHE.get("html"):
-            _trigger_refresh_async()
+            # Try a fast render from cached picks without remote calls.
+            try:
+                with app.app_context():
+                    context, payload = _render_dashboard(
+                        "tips",
+                        refresh_requested=False,
+                        render=False,
+                        force_refresh=False,
+                        allow_remote=False,
+                    )
+                    html = render_template_string(_get_template(), **context)
+                with _RESPONSE_LOCK:
+                    _RESPONSE_CACHE["html"] = html
+                    _RESPONSE_CACHE["ts"] = time.time()
+                    global _LAST_PAYLOAD
+                    _LAST_PAYLOAD = payload
+            except Exception:
+                _trigger_refresh_async()
         with _RESPONSE_LOCK:
             html = _RESPONSE_CACHE.get("html", "")
         if html and _LAST_PAYLOAD:
@@ -6715,8 +6734,17 @@ def api_dashboard():
         return ("Internal Server Error", 500)
 
 
-def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = True, force_refresh: bool = False):
+def _render_dashboard(
+    active_tab: str,
+    refresh_requested: bool,
+    render: bool = True,
+    force_refresh: bool = False,
+    allow_remote: bool = True,
+):
     _reload_env()
+    if not allow_remote:
+        refresh_requested = False
+        force_refresh = False
     target_odds = 2.0
     window_hours = 24
 
@@ -6780,13 +6808,13 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
     if cached and not refresh_requested and not force_refresh:
         competitions = fallback_competitions
     else:
-        if not FAST_MODE:
+        if not FAST_MODE and allow_remote:
             competitions = _fetch_competitions_fd(config.football_data_token)
         if not competitions:
             competitions = fallback_competitions
     allowed_codes = {str(comp.get("code") or "") for comp in competitions if comp.get("code")}
     primary = _primary_competition(competitions)
-    if primary and not (cached and not refresh_requested and not force_refresh):
+    if allow_remote and primary and not (cached and not refresh_requested and not force_refresh):
         recent_matches = _fetch_recent_matches_fd(config.football_data_token, primary)
         standings = _fetch_standings_fd(config.football_data_token, primary)
 
@@ -6805,7 +6833,7 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
     odds_pool_matches: list[dict] = []
     diag_counts = {"comp_24": 0, "all_24": 0, "api_football_24": 0, "window_from": "", "window_to": "", "window_source": "system"}
 
-    if refresh_requested:
+    if refresh_requested and allow_remote:
         cached_updated_at = None
         _reset_sportradar_budget()
         pre_month, _ = _api_usage_counts()
@@ -7398,7 +7426,10 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
             best_pick, target_matches = _enforce_tip_presence(cached.get("best_pick"), raw_target_matches)
             best_pick = _enrich_pick(best_pick) if best_pick else None
             target_matches = [_enrich_pick(item) for item in target_matches] if target_matches else []
-    fallback_fixtures, fallback_standings = _fetch_public_fixtures(competitions, 24)
+    if allow_remote:
+        fallback_fixtures, fallback_standings = _fetch_public_fixtures(competitions, 24)
+    else:
+        fallback_fixtures, fallback_standings = [], {}
     target_matches = _normalize_target_matches(
         best_pick,
         target_matches,
@@ -7408,7 +7439,7 @@ def _render_dashboard(active_tab: str, refresh_requested: bool, render: bool = T
         rss_items,
         market_roi,
     )
-    if not best_pick and odds_pool_matches:
+    if allow_remote and not best_pick and odds_pool_matches:
         pseudo = []
         live_fixtures, live_standings = _fetch_public_fixtures(competitions, 24)
         for item in odds_pool_matches:
