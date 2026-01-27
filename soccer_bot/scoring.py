@@ -197,8 +197,8 @@ def score_fixture(
         ]
         if over_vals:
             over_rate = sum(over_vals) / len(over_vals)
-            # Nudge expected goals using observed over-rate signal.
-            goals_total *= 0.9 + (over_rate * 0.3)
+            # Stronger nudge: observed over-rate should materially move totals.
+            goals_total *= 0.8 + (over_rate * 0.8)
     goals_score = max(-0.1, min(0.1, (goals_total - 2.4) / 6))
 
     stats_score = 0.0
@@ -327,7 +327,7 @@ def score_fixture(
         ]
         if over_vals:
             over_rate = sum(over_vals) / len(over_vals)
-            over_model_base = (over_model_base * 0.7) + (over_rate * 0.3)
+            over_model_base = (over_model_base * 0.5) + (over_rate * 0.5)
     over_model = _calibrate_prob(over_model_base, coverage)
     under_model = _calibrate_prob(1 - over_model_base, coverage)
     over_score, over_ev = _select_score(over_model, over_imp, over_odd)
