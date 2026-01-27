@@ -731,6 +731,57 @@
           </tbody>
         </table>
       </article>
+      <article class="card table-card">
+        <h3>Lekerdezesek es tippek (validacio)</h3>
+        <p class="small-label">Az utolso frissitesek mentett allapota, hibakkal egyutt.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Idopont</th>
+              <th>Legjobb tipp</th>
+              <th>Top piacok</th>
+              <th>Valid</th>
+              <th>Jelzesek</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for run in pick_runs %}
+            {% set best = run.best_pick or {} %}
+            <tr>
+              <td>{{ (run.created_at or run.day_key)[:16] }}</td>
+              <td>
+                {{ best.get('home_team', '-') }} vs {{ best.get('away_team', '-') }}<br/>
+                <span class="small-label">{{ best.get('market_key', '-') }} · {{ best.get('outcome', '-') }}</span>
+              </td>
+              <td>
+                {% if run.targets %}
+                  {% for item in run.targets[:3] %}
+                    <div class="small-label">{{ item.get('market_key', '-') }} · {{ item.get('outcome', '-') }}</div>
+                  {% endfor %}
+                {% else %}
+                  <span class="small-label">n/a</span>
+                {% endif %}
+              </td>
+              <td>
+                <span class="tag" style="border-color: {{ 'var(--accent)' if run.valid else 'var(--accent-strong)' }}; color: {{ 'var(--accent)' if run.valid else 'var(--accent-strong)' }};">
+                  {{ "VALID" if run.valid else "HIBA" }}
+                </span>
+              </td>
+              <td>
+                {% if run.issues %}
+                  <span class="small-label">{{ ", ".join(run.issues) }}</span>
+                {% else %}
+                  <span class="small-label">ok</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+            {% if not pick_runs %}
+            <tr><td colspan="5">Meg nincs mentett frissites.</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </article>
     </section>
   </div>
   <script>

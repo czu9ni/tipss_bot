@@ -2270,7 +2270,7 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
                 list_limit=5,
             )
             if season_stats:
-                recent = _calc_recent_rates(fdco_matches)
+                recent = _calc_recent_rates(fdco_matches) or {}
                 result = {
                     "team": team_name,
                     "win_rate": season_stats["win_rate"],
@@ -2310,7 +2310,7 @@ def _summary_dict(team_name: str, team_id: int | None = None) -> dict:
             list_limit=5,
         )
         if season_stats:
-            recent = _calc_recent_rates(fdco_matches)
+            recent = _calc_recent_rates(fdco_matches) or {}
             result = {
                 "team": team_name,
                 "win_rate": season_stats["win_rate"],
@@ -2759,7 +2759,27 @@ def _select_stat_picks(picks: list[dict], limit: int = 2) -> tuple[dict | None, 
     complete = _filter_picks_by_risk(complete)
     remaining = [item for item in enriched if item not in complete]
     remaining = _filter_picks_by_risk(remaining)
-    selected = (complete + remaining)[:limit]
+    ranked = complete + remaining
+    # Diversify stat-only picks so we do not always show the same market.
+    diversified: list[dict] = []
+    used_markets: set[str] = set()
+    for item in ranked:
+        market_key = str(item.get("market_key") or "")
+        if market_key and market_key in used_markets and len(ranked) > limit:
+            continue
+        diversified.append(item)
+        if market_key:
+            used_markets.add(market_key)
+        if len(diversified) >= limit:
+            break
+    if len(diversified) < limit:
+        for item in ranked:
+            if item in diversified:
+                continue
+            diversified.append(item)
+            if len(diversified) >= limit:
+                break
+    selected = diversified[:limit]
     if not complete:
         for item in selected:
             item["notice"] = "NINCS ELEG STAT, AZ AJANLAS KORLATOZOTT"
@@ -6648,6 +6668,108 @@ def _load_cached_picks(db) -> dict | None:
         return None
 
 
+def _validate_pick_run(best_pick: dict | None, target_matches: list[dict]) -> tuple[bool, list[str]]:
+    issues: list[str] = []
+    if not best_pick:
+        issues.append("nincs_best_pick")
+    if _is_placeholder_pick(best_pick):
+        issues.append("placeholder_pick")
+    if len(target_matches or []) < 2:
+        issues.append("keves_tipp")
+    markets = {str(item.get("market_key") or "") for item in (target_matches or []) if item.get("market_key")}
+    if len(target_matches or []) >= 2 and len(markets) <= 1:
+        issues.append("azonos_piac")
+    for item in target_matches or []:
+        notice = str(item.get("notice") or "")
+        if "KORLATOZOTT" in notice.upper():
+            issues.append("korlatozott_adat")
+            break
+    return (len(issues) == 0), issues
+
+
+def _record_pick_run(db, best_pick: dict | None, target_matches: list[dict], odds_error: str | None) -> None:
+    try:
+        now_utc = datetime.now(timezone.utc).isoformat()
+        day_key = datetime.now(BUDAPEST_TZ).strftime("%Y-%m-%d")
+        valid, issues = _validate_pick_run(best_pick, target_matches)
+        payload = {
+            "odds_error": odds_error,
+            "best_pick": {
+                "home_team": (best_pick or {}).get("home_team"),
+                "away_team": (best_pick or {}).get("away_team"),
+                "market_key": (best_pick or {}).get("market_key"),
+                "outcome": (best_pick or {}).get("outcome"),
+                "score": (best_pick or {}).get("score"),
+                "model_prob": (best_pick or {}).get("model_prob"),
+            },
+            "targets": [
+                {
+                    "home_team": item.get("home_team"),
+                    "away_team": item.get("away_team"),
+                    "market_key": item.get("market_key"),
+                    "outcome": item.get("outcome"),
+                    "score": item.get("score"),
+                    "model_prob": item.get("model_prob"),
+                    "notice": item.get("notice"),
+                }
+                for item in (target_matches or [])[:4]
+            ],
+        }
+        db.connection.execute(
+            """
+            INSERT INTO pick_runs (created_at, day_key, payload, valid, issues)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                now_utc,
+                day_key,
+                json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                1 if valid else 0,
+                json.dumps(issues, ensure_ascii=False),
+            ),
+        )
+        db.connection.commit()
+    except Exception:
+        pass
+
+
+def _list_pick_runs(db, limit: int = 40) -> list[dict]:
+    try:
+        cursor = db.connection.execute(
+            """
+            SELECT created_at, day_key, payload, valid, issues
+            FROM pick_runs
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        )
+        rows: list[dict] = []
+        for created_at, day_key, payload, valid, issues in cursor.fetchall():
+            try:
+                data = json.loads(payload)
+            except Exception:
+                data = {}
+            try:
+                issues_list = json.loads(issues) if issues else []
+            except Exception:
+                issues_list = []
+            rows.append(
+                {
+                    "created_at": created_at,
+                    "day_key": day_key,
+                    "valid": bool(valid),
+                    "issues": issues_list if isinstance(issues_list, list) else [],
+                    "odds_error": data.get("odds_error"),
+                    "best_pick": data.get("best_pick") if isinstance(data.get("best_pick"), dict) else {},
+                    "targets": data.get("targets") if isinstance(data.get("targets"), list) else [],
+                }
+            )
+        return rows
+    except Exception:
+        return []
+
+
 def _select_picks_near_odds(picks: list[dict], target: float, limit: int = 2) -> list[dict]:
     candidates = [pick for pick in picks if abs(pick.get("odds", 0.0) - target) <= 0.15]
     candidates.sort(key=lambda item: (item["distance"], -item["score"]))
@@ -7487,6 +7609,7 @@ def _render_dashboard(
                     "refresh_usage": refresh_usage,
                 },
             )
+            _record_pick_run(db, best_pick, target_matches or [], odds_error)
             if target_matches:
                 if SR_ENABLE_MAPPING:
                     _fetch_mappings_sportradar()
@@ -7599,6 +7722,7 @@ def _render_dashboard(
     saved_summary_90d = _saved_picks_summary_range(saved_picks, 90)
     saved_summary_180d = _saved_picks_summary_range(saved_picks, 180)
     saved_by_source = _saved_picks_summary_by_source(db)
+    pick_runs = _list_pick_runs(db)
     stake_pct = _stake_from_score(best_pick.get("score") if best_pick else None, saved_summary_30d.get("roi"))
 
     configured_sources = ", ".join(sorted({item.get("label", "") for item in _load_rss_sources() if item.get("label")}))
@@ -7753,6 +7877,7 @@ def _render_dashboard(
         "saved_summary_90d": saved_summary_90d,
         "saved_summary_180d": saved_summary_180d,
         "saved_by_source": saved_by_source,
+        "pick_runs": pick_runs,
         "daily_roi": daily_roi,
         "stake_pct": stake_pct,
         "diag_counts": diag_counts,

@@ -104,6 +104,30 @@ class Database:
             )
             """
         )
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pick_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                day_key TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                valid INTEGER NOT NULL,
+                issues TEXT NOT NULL
+            )
+            """
+        )
+        self.connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS pick_runs_created_at
+            ON pick_runs (created_at DESC)
+            """
+        )
+        self.connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS pick_runs_day_key
+            ON pick_runs (day_key)
+            """
+        )
         if not _SCHEMA_READY:
             self.connection.execute(
                 """
