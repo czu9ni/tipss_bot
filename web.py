@@ -341,6 +341,8 @@ def _build_http_session() -> requests.Session:
 
 
 _HTTP = _build_http_session()
+_REMOTE_CALLS = 0
+_REMOTE_CALLS_LIMIT = int(os.environ.get("MAX_REMOTE_CALLS", "25") or 25)
 
 RSS_FEEDS = [
     {"url": "http://feeds.bbci.co.uk/sport/football/rss.xml", "weight": 0.9, "label": "BBC Football"},
@@ -641,6 +643,11 @@ def _update_api_headers(api_name: str, headers: dict) -> None:
 
 
 def _http_get(url: str, api: str | None = None, **kwargs) -> requests.Response:
+    global _REMOTE_CALLS
+    if _REMOTE_CALLS_LIMIT > 0:
+        _REMOTE_CALLS += 1
+        if _REMOTE_CALLS > _REMOTE_CALLS_LIMIT:
+            raise RuntimeError("remote call limit reached")
     api_name = api or _api_name_from_url(url)
     if api_name:
         _note_api_call(api_name)
@@ -5607,6 +5614,9 @@ def _stat_pick_for_match(
                 score += 0.06
             elif over_rate <= 0.45 and outcome_lower.startswith("under"):
                 score += 0.06
+            else:
+                # Penalize totals when the over-rate signal is ambiguous.
+                score -= 0.08
         if isinstance(btts_rate, (int, float)) and market_lower == "btts":
             if btts_rate >= 0.6 and "igen" in outcome_lower:
                 score += 0.05
@@ -5848,6 +5858,15 @@ def _fetch_public_fixtures(
     sr_limit = int(os.environ.get("SR_STANDINGS_LIMIT", "4"))
     for comp_code, season_id in list(sr_season_ids.items())[:sr_limit]:
         standings_by_comp[comp_code] = _fetch_standings_sportradar(season_id)
+    # Persist league standings so we can render without burning API quota.
+    try:
+        cache = DiskCache(_cache_dir())
+        cache_day = datetime.now(BUDAPEST_TZ).strftime("%Y-%m-%d")
+        for code, rows in standings_by_comp.items():
+            if rows:
+                cache.set(cache_day, f"standings_{code}", rows)
+    except Exception:
+        pass
     if STAT_ONLY_MAX_FIXTURES > 0 and len(fixtures) > STAT_ONLY_MAX_FIXTURES:
         fixtures = fixtures[:STAT_ONLY_MAX_FIXTURES]
     offline = _load_offline_fixtures()
@@ -5869,6 +5888,16 @@ def _fetch_standings_fd(token: str, comp_code: str, limit: int = 10) -> list[dic
     cached = _cache_get(_FD_STANDINGS_CACHE, cache_key, FD_STANDINGS_TTL_SECONDS)
     if isinstance(cached, list):
         return cached
+    # Try disk cache first to avoid remote calls when quota is tight.
+    try:
+        cache = DiskCache(_cache_dir())
+        cache_day = datetime.now(BUDAPEST_TZ).strftime("%Y-%m-%d")
+        cached_disk = cache.get(cache_day, f"standings_{comp_code}")
+        if isinstance(cached_disk, list) and cached_disk:
+            _cache_set(_FD_STANDINGS_CACHE, cache_key, cached_disk)
+            return cached_disk[:limit]
+    except Exception:
+        pass
     if _backoff_active("football-data"):
         return []
     try:
@@ -7128,6 +7157,8 @@ def _render_dashboard(
     allow_remote: bool = True,
 ):
     _reload_env()
+    global _REMOTE_CALLS
+    _REMOTE_CALLS = 0
     if not allow_remote:
         refresh_requested = False
         force_refresh = False
