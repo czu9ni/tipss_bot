@@ -7879,6 +7879,33 @@ def _render_dashboard(
         if fallback_picks:
             best_pick, target_matches = _select_stat_picks(fallback_picks, limit=2)
             target_matches = _normalize_target_matches(best_pick, target_matches, best_combo)
+    if not standings:
+        # Fall back to any table entries discovered during team summary fetches.
+        inferred_rows: list[dict] = []
+        seen: set[str] = set()
+        for pick in (target_matches or [])[:4]:
+            for side in ("home_summary", "away_summary"):
+                summary = pick.get(side) if isinstance(pick, dict) else None
+                table_entry = summary.get("table_entry") if isinstance(summary, dict) else None
+                if not isinstance(table_entry, dict):
+                    continue
+                team = str(table_entry.get("team") or "")
+                if not team or team in seen:
+                    continue
+                seen.add(team)
+                inferred_rows.append(
+                    {
+                        "position": table_entry.get("position"),
+                        "team": team,
+                        "points": table_entry.get("points"),
+                        "played": table_entry.get("played"),
+                        "goals_for": table_entry.get("goals_for"),
+                        "goals_against": table_entry.get("goals_against"),
+                    }
+                )
+        inferred_rows.sort(key=lambda row: (row.get("position") is None, row.get("position") or 999))
+        if inferred_rows:
+            standings = inferred_rows
     _settle_previous_day_picks(db)
     saved_picks = _list_saved_picks(db)
     saved_summary = _saved_picks_summary(saved_picks)
