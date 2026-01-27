@@ -1338,8 +1338,19 @@ def _start_background_refresh() -> None:
 def _render_and_cache(force: bool = False, active_tab: str = "tips") -> bool:
     global _LAST_RENDER_HASH, _LAST_RENDER_TS
     throttle = max(60, BACKGROUND_REFRESH_SECONDS)
-    with app.app_context():
-        context, payload = _render_dashboard(active_tab, refresh_requested=True, render=False, force_refresh=force)
+    try:
+        with app.app_context():
+            context, payload = _render_dashboard(active_tab, refresh_requested=True, render=False, force_refresh=force)
+    except Exception:
+        # Safe refresh fallback: render from cached/local data only.
+        with app.app_context():
+            context, payload = _render_dashboard(
+                active_tab,
+                refresh_requested=False,
+                render=False,
+                force_refresh=False,
+                allow_remote=False,
+            )
     payload_hash = _stable_hash(payload)
     now = time.time()
     if not force and _LAST_RENDER_HASH == payload_hash and (now - _LAST_RENDER_TS) < throttle:
