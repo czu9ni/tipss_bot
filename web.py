@@ -6279,18 +6279,20 @@ def _save_pick(db, payload: dict) -> None:
     db.connection.commit()
 
 
-def _list_saved_picks(db) -> list[dict]:
+def _list_saved_picks(db, limit: int | None = None) -> list[dict]:
+    max_rows = limit if isinstance(limit, int) and limit > 0 else int(os.environ.get("SAVED_PICKS_LIMIT", "1000"))
     cursor = db.connection.execute(
         """
-        SELECT created_at, home_team, away_team, market_key, outcome, odds, status, result, source, day_key
+        SELECT id, created_at, commence_time, home_team, away_team, market_key, outcome, odds, status, result, source, day_key
         FROM saved_picks
         ORDER BY created_at DESC
-        LIMIT 100
-        """
+        LIMIT ?
+        """,
+        (max_rows,),
     )
     rows = cursor.fetchall()
     results = []
-    for created_at, home_team, away_team, market_key, outcome, odds, status, result, source, day_key in rows:
+    for pick_id, created_at, commence_time, home_team, away_team, market_key, outcome, odds, status, result, source, day_key in rows:
         if result == "win":
             result_label = "nyert"
         elif result == "lose":
@@ -6301,7 +6303,9 @@ def _list_saved_picks(db) -> list[dict]:
             result_label = "-"
         results.append(
             {
+                "id": int(pick_id),
                 "created_at": str(created_at)[:16],
+                "commence_time": str(commence_time or ""),
                 "home_team": home_team,
                 "away_team": away_team,
                 "market_key": market_key,
@@ -6315,6 +6319,46 @@ def _list_saved_picks(db) -> list[dict]:
             }
         )
     return results
+
+
+def _day_results(db, days: int = 60) -> list[dict]:
+    limit_days = max(1, int(days))
+    cursor = db.connection.execute(
+        """
+        SELECT day_key, result, status
+        FROM saved_picks
+        WHERE day_key IS NOT NULL AND day_key != ''
+        ORDER BY day_key DESC, created_at DESC
+        LIMIT ?
+        """,
+        (limit_days * 8,),
+    )
+    buckets: dict[str, dict[str, int]] = {}
+    for day_key, result, status in cursor.fetchall():
+        key = str(day_key or "")
+        if not key:
+            continue
+        entry = buckets.setdefault(key, {"wins": 0, "losses": 0, "pushes": 0, "settled": 0, "total": 0})
+        entry["total"] += 1
+        if status == "settled":
+            entry["settled"] += 1
+            if result == "win":
+                entry["wins"] += 1
+            elif result == "lose":
+                entry["losses"] += 1
+            elif result == "push":
+                entry["pushes"] += 1
+    out: list[dict] = []
+    for day_key, entry in buckets.items():
+        if entry["wins"] >= 2:
+            status_label = "gyoztes"
+        elif entry["settled"] >= 2:
+            status_label = "nem jott"
+        else:
+            status_label = "nyitott"
+        out.append({"day_key": day_key, "status_label": status_label, **entry})
+    out.sort(key=lambda item: item["day_key"], reverse=True)
+    return out[:limit_days]
 
 
 def _auto_save_picks(db, picks: list[dict]) -> None:
@@ -7723,6 +7767,7 @@ def _render_dashboard(
     saved_summary_180d = _saved_picks_summary_range(saved_picks, 180)
     saved_by_source = _saved_picks_summary_by_source(db)
     pick_runs = _list_pick_runs(db)
+    day_results = _day_results(db)
     stake_pct = _stake_from_score(best_pick.get("score") if best_pick else None, saved_summary_30d.get("roi"))
 
     configured_sources = ", ".join(sorted({item.get("label", "") for item in _load_rss_sources() if item.get("label")}))
@@ -7878,6 +7923,7 @@ def _render_dashboard(
         "saved_summary_180d": saved_summary_180d,
         "saved_by_source": saved_by_source,
         "pick_runs": pick_runs,
+        "day_results": day_results,
         "daily_roi": daily_roi,
         "stake_pct": stake_pct,
         "diag_counts": diag_counts,

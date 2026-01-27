@@ -724,7 +724,15 @@
               <td>{{ pick.market_label }}</td>
               <td>{{ pick.outcome }}</td>
               <td>{{ '%.2f'|format(pick.odds) }}</td>
-              <td>{{ pick.result_label }}</td>
+              <td>
+                <span class="tag" style="border-color: {{ 'var(--accent)' if pick.result_label == 'nyert' else 'var(--accent-strong)' if pick.result_label == 'vesztett' else 'var(--muted)' }}; color: {{ 'var(--accent)' if pick.result_label == 'nyert' else 'var(--accent-strong)' if pick.result_label == 'vesztett' else 'var(--text)' }};">
+                  {{ pick.result_label }}
+                </span>
+                <div class="table-actions" style="margin-top: 0.4rem;">
+                  <button type="button" class="btn" data-settle-id="{{ pick.id }}" data-settle-result="win">Jott</button>
+                  <button type="button" class="btn" data-settle-id="{{ pick.id }}" data-settle-result="lose">Nem jott</button>
+                </div>
+              </td>
               <td>{{ pick.source or '-' }}</td>
             </tr>
             {% endfor %}
@@ -778,6 +786,40 @@
             {% endfor %}
             {% if not pick_runs %}
             <tr><td colspan="5">Meg nincs mentett frissites.</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </article>
+      <article class="card table-card">
+        <h3>Napi eredmeny (2/2 szabaly)</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Nap</th>
+              <th>Statusz</th>
+              <th>Nyert</th>
+              <th>Vesztett</th>
+              <th>Settled</th>
+              <th>Osszes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for day in day_results %}
+            <tr>
+              <td>{{ day.day_key }}</td>
+              <td>
+                <span class="tag" style="border-color: {{ 'var(--accent)' if day.status_label == 'gyoztes' else 'var(--accent-strong)' if day.status_label == 'nem jott' else 'var(--muted)' }}; color: {{ 'var(--accent)' if day.status_label == 'gyoztes' else 'var(--accent-strong)' if day.status_label == 'nem jott' else 'var(--text)' }};">
+                  {{ day.status_label }}
+                </span>
+              </td>
+              <td>{{ day.wins }}</td>
+              <td>{{ day.losses }}</td>
+              <td>{{ day.settled }}</td>
+              <td>{{ day.total }}</td>
+            </tr>
+            {% endfor %}
+            {% if not day_results %}
+            <tr><td colspan="6">Meg nincs napi eredmeny.</td></tr>
             {% endif %}
           </tbody>
         </table>
@@ -913,11 +955,38 @@
       });
     };
 
+    const initManualSettle = () => {
+      const buttons = document.querySelectorAll("[data-settle-id][data-settle-result]");
+      buttons.forEach(btn => {
+        btn.addEventListener("click", async () => {
+          const id = Number(btn.dataset.settleId || 0);
+          const result = String(btn.dataset.settleResult || "");
+          if (!id || !result) return;
+          btn.disabled = true;
+          try {
+            const resp = await fetch("/api/manual_settle", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id, result }),
+            });
+            if (!resp.ok) {
+              btn.disabled = false;
+              return;
+            }
+            window.location.reload();
+          } catch (err) {
+            btn.disabled = false;
+          }
+        });
+      });
+    };
+
     document.addEventListener("DOMContentLoaded", () => {
       performance.mark("init-start");
       requestAnimationFrame(() => {
         initTabs();
         initDashboard();
+        initManualSettle();
         drawLineChart(document.getElementById("chart-odds"), dailyRoi.odds || [], "#4df5ff");
         drawLineChart(document.getElementById("chart-no-odds"), dailyRoi.no_odds || [], "#ff4d98");
         const app = document.getElementById("app");
