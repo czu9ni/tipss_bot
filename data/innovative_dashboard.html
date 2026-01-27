@@ -1062,6 +1062,16 @@
         };
         button.addEventListener("click", debounce(handler, 150));
       });
+      // Ensure saved tips are visible even if the click handler fails silently.
+      const savedBlock = heavyBlocks.find(b => b.templateId === "savedTemplate");
+      if (savedBlock) {
+        loadHeavyBlock(savedBlock);
+        const btn = document.getElementById(savedBlock.btnId);
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = "Betoltve";
+        }
+      }
     };
 
     const drawLineChart = (canvas, series, color) => {
