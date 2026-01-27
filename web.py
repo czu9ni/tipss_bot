@@ -7207,6 +7207,7 @@ def _render_dashboard(
     refresh_usage: dict[str, int] = {}
     odds_pool_matches: list[dict] = []
     diag_counts = {"comp_24": 0, "all_24": 0, "api_football_24": 0, "window_from": "", "window_to": "", "window_source": "system"}
+    standings_by_comp: dict[str, list[dict]] = {}
 
     if refresh_requested and allow_remote:
         cached_updated_at = None
@@ -7879,6 +7880,17 @@ def _render_dashboard(
         if fallback_picks:
             best_pick, target_matches = _select_stat_picks(fallback_picks, limit=2)
             target_matches = _normalize_target_matches(best_pick, target_matches, best_combo)
+    if not standings and standings_by_comp:
+        # Reuse already-fetched league standings instead of calling the API again.
+        primary = _primary_competition(competitions)
+        primary_code = str((primary or {}).get("code") or "")
+        if primary_code and primary_code in standings_by_comp:
+            standings = standings_by_comp.get(primary_code) or []
+        if not standings:
+            for rows in standings_by_comp.values():
+                if rows:
+                    standings = rows
+                    break
     if not standings:
         # Fall back to any table entries discovered during team summary fetches.
         inferred_rows: list[dict] = []
