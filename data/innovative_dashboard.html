@@ -605,6 +605,45 @@
     </section>
 
     <section class="grid">
+      <article class="card table-card">
+        <h3>Teljes tabella</h3>
+        {% set ns = namespace(teams=[]) %}
+        {% for pick in active_all[:2] %}
+          {% if pick.home_team %}{% set _ = ns.teams.append(pick.home_team|lower) %}{% endif %}
+          {% if pick.away_team %}{% set _ = ns.teams.append(pick.away_team|lower) %}{% endif %}
+        {% endfor %}
+        {% if standings %}
+        <table>
+          <thead>
+            <tr><th>#</th><th>Csapat</th><th>Pont</th><th>Meccs</th><th>G+</th><th>G-</th></tr>
+          </thead>
+          <tbody>
+            {% for row in standings %}
+            {% set team_lower = (row.team or '')|lower %}
+            {% set is_focus = team_lower in ns.teams %}
+            <tr style="{{ 'outline: 2px solid var(--accent); outline-offset: -2px;' if is_focus else '' }}">
+              <td>{{ row.position }}</td>
+              <td>
+                {{ row.team }}
+                {% if is_focus %}
+                <span class="tag" style="margin-left:0.4rem;">kivalasztott</span>
+                {% endif %}
+              </td>
+              <td>{{ row.points }}</td>
+              <td>{{ row.played }}</td>
+              <td>{{ row.goals_for }}</td>
+              <td>{{ row.goals_against }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="small-label">Nincs elerheto tabella adat.</p>
+        {% endif %}
+      </article>
+    </section>
+
+    <section class="grid">
       <article class="card highlight-card">
         {% if top_pick %}
         <div class="card-head">
