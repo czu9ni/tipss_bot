@@ -5623,15 +5623,14 @@ def _stat_pick_for_match(
             elif btts_rate <= 0.45 and "nem" in outcome_lower:
                 score += 0.05
         adjusted.append((score, pick_item))
-    # Efficiency-first selection: if a market has a very strong model probability,
-    # prefer it over marginal score differences.
-    high_prob = [
-        (float(item.model_prob or 0.0), item)
+    # Math-first selection: choose the highest model probability (argmax P).
+    prob_ranked = [
+        (float(item.model_prob), item)
         for _, item in adjusted
-        if isinstance(item.model_prob, (int, float)) and float(item.model_prob) >= 0.62
+        if isinstance(item.model_prob, (int, float))
     ]
-    if high_prob:
-        best = max(high_prob, key=lambda it: it[0])[1]
+    if prob_ranked:
+        best = max(prob_ranked, key=lambda it: it[0])[1]
     else:
         best = max(adjusted, key=lambda item: item[0])[1] if adjusted else max(picks, key=lambda p: p.score)
     market_key = _market_key_from_pick(best.market)
