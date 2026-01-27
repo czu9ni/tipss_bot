@@ -7969,6 +7969,12 @@ def _render_dashboard(
         if inferred_rows:
             standings = inferred_rows
     _settle_previous_day_picks(db)
+    # Persist run history even when we are forced into cache/local mode.
+    if target_matches:
+        try:
+            _record_pick_run(db, best_pick, target_matches, odds_error)
+        except Exception:
+            pass
     saved_picks = _list_saved_picks(db)
     saved_summary = _saved_picks_summary(saved_picks)
     saved_summary_15d = _saved_picks_summary_range(saved_picks, 15)
