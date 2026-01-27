@@ -5508,6 +5508,15 @@ def _stat_pick_for_match(
         "away_corners": away_summary.get("corners_avg"),
         "home_cards": home_summary.get("cards_avg"),
         "away_cards": away_summary.get("cards_avg"),
+        # Richer stat hints so the scorer can use more than a single equation.
+        "home_over25_rate": home_summary.get("over25_rate") or home_form.get("over25_rate"),
+        "away_over25_rate": away_summary.get("over25_rate") or away_form.get("over25_rate"),
+        "home_btts_rate": home_summary.get("btts_rate") or home_form.get("btts_rate"),
+        "away_btts_rate": away_summary.get("btts_rate") or away_form.get("btts_rate"),
+        "home_gf_avg": home_summary.get("goals_for_avg") or home_form.get("gf_avg"),
+        "away_gf_avg": away_summary.get("goals_for_avg") or away_form.get("gf_avg"),
+        "home_ga_avg": home_form.get("ga_avg"),
+        "away_ga_avg": away_form.get("ga_avg"),
     }
     has_stats = any(isinstance(stats_payload.get(k), (int, float)) for k in stats_payload)
     picks = score_fixture(

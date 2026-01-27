@@ -176,9 +176,29 @@ def score_fixture(
     away_gf = _goals_per_match(away_row.get("goals_for"), away_played)
     home_ga = _goals_per_match(home_row.get("goals_against"), home_played)
     away_ga = _goals_per_match(away_row.get("goals_against"), away_played)
+    if stats:
+        # Blend in richer team stats when available to avoid a single weak equation.
+        if isinstance(stats.get("home_gf_avg"), (int, float)):
+            home_gf = (home_gf * 0.6) + (float(stats["home_gf_avg"]) * 0.4)
+        if isinstance(stats.get("away_gf_avg"), (int, float)):
+            away_gf = (away_gf * 0.6) + (float(stats["away_gf_avg"]) * 0.4)
+        if isinstance(stats.get("home_ga_avg"), (int, float)):
+            home_ga = (home_ga * 0.6) + (float(stats["home_ga_avg"]) * 0.4)
+        if isinstance(stats.get("away_ga_avg"), (int, float)):
+            away_ga = (away_ga * 0.6) + (float(stats["away_ga_avg"]) * 0.4)
     expected_home = max(0.4, home_gf * (1.1 - 0.2 * away_ga))
     expected_away = max(0.4, away_gf * (1.1 - 0.2 * home_ga))
     goals_total = expected_home + expected_away
+    if stats:
+        over_vals = [
+            float(val)
+            for val in (stats.get("home_over25_rate"), stats.get("away_over25_rate"))
+            if isinstance(val, (int, float))
+        ]
+        if over_vals:
+            over_rate = sum(over_vals) / len(over_vals)
+            # Nudge expected goals using observed over-rate signal.
+            goals_total *= 0.9 + (over_rate * 0.3)
     goals_score = max(-0.1, min(0.1, (goals_total - 2.4) / 6))
 
     stats_score = 0.0
@@ -298,8 +318,18 @@ def score_fixture(
     under_odd = ou_market.get("under_2.5")
     over_imp = _implied_prob(over_odd)
     under_imp = _implied_prob(under_odd)
-    over_model = _calibrate_prob(_poisson_over25_prob(goals_total), coverage)
-    under_model = _calibrate_prob(1 - _poisson_over25_prob(goals_total), coverage)
+    over_model_base = _poisson_over25_prob(goals_total)
+    if stats:
+        over_vals = [
+            float(val)
+            for val in (stats.get("home_over25_rate"), stats.get("away_over25_rate"))
+            if isinstance(val, (int, float))
+        ]
+        if over_vals:
+            over_rate = sum(over_vals) / len(over_vals)
+            over_model_base = (over_model_base * 0.7) + (over_rate * 0.3)
+    over_model = _calibrate_prob(over_model_base, coverage)
+    under_model = _calibrate_prob(1 - over_model_base, coverage)
     over_score, over_ev = _select_score(over_model, over_imp, over_odd)
     under_score, under_ev = _select_score(under_model, under_imp, under_odd)
     outcome_ou = "Over 2.5" if over_score >= under_score else "Under 2.5"
@@ -329,8 +359,18 @@ def score_fixture(
     btts_no_odd = btts_market.get("no")
     btts_yes_imp = _implied_prob(btts_yes_odd)
     btts_no_imp = _implied_prob(btts_no_odd)
-    btts_yes_model = _calibrate_prob(min(0.9, expected_home * expected_away / 2.0), coverage)
-    btts_no_model = _calibrate_prob(1 - min(0.9, expected_home * expected_away / 2.0), coverage)
+    btts_yes_base = min(0.9, expected_home * expected_away / 2.0)
+    if stats:
+        btts_vals = [
+            float(val)
+            for val in (stats.get("home_btts_rate"), stats.get("away_btts_rate"))
+            if isinstance(val, (int, float))
+        ]
+        if btts_vals:
+            btts_rate = sum(btts_vals) / len(btts_vals)
+            btts_yes_base = (btts_yes_base * 0.7) + (btts_rate * 0.3)
+    btts_yes_model = _calibrate_prob(btts_yes_base, coverage)
+    btts_no_model = _calibrate_prob(1 - btts_yes_base, coverage)
     btts_yes_score, btts_yes_ev = _select_score(btts_yes_model, btts_yes_imp, btts_yes_odd)
     btts_no_score, btts_no_ev = _select_score(btts_no_model, btts_no_imp, btts_no_odd)
     outcome_btts = "GG - Igen" if btts_yes_score >= btts_no_score else "GG - Nem"
