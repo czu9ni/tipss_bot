@@ -6243,6 +6243,110 @@ def _settle_saved_picks(db, api_key: str) -> None:
     db.connection.commit()
 
 
+def _settle_pick_from_score(pick: dict, home_goals: int, away_goals: int) -> str | None:
+    market = str(pick.get("market_key") or "").lower()
+    outcome = str(pick.get("outcome") or "").lower()
+    total_goals = int(home_goals) + int(away_goals)
+    if market in {"totals", "alternate_totals", "over_under"}:
+        if "under" in outcome:
+            return "win" if total_goals < 3 else "lose"
+        if "over" in outcome:
+            return "win" if total_goals >= 3 else "lose"
+        return None
+    if market == "btts":
+        btts = home_goals > 0 and away_goals > 0
+        if "igen" in outcome or "yes" in outcome:
+            return "win" if btts else "lose"
+        if "nem" in outcome or "no" in outcome:
+            return "win" if not btts else "lose"
+        return None
+    if market in {"h2h", "1x2"}:
+        if home_goals > away_goals:
+            actual = "home"
+        elif home_goals < away_goals:
+            actual = "away"
+        else:
+            actual = "draw"
+        if "hazai" in outcome or "home" in outcome:
+            return "win" if actual == "home" else "lose"
+        if "vendeg" in outcome or "away" in outcome:
+            return "win" if actual == "away" else "lose"
+        if "dontetlen" in outcome or "draw" in outcome:
+            return "win" if actual == "draw" else "lose"
+        return None
+    return None
+
+
+def _settle_previous_day_picks(db) -> None:
+    if not config.football_data_token:
+        return
+    prev_day = (datetime.now(BUDAPEST_TZ).date() - timedelta(days=1)).isoformat()
+    cursor = db.connection.execute(
+        """
+        SELECT id, home_team, away_team, market_key, outcome
+        FROM saved_picks
+        WHERE status != 'settled' AND day_key = ?
+        ORDER BY created_at DESC
+        LIMIT 40
+        """,
+        (prev_day,),
+    )
+    rows = cursor.fetchall()
+    if not rows:
+        return
+    headers = {"X-Auth-Token": config.football_data_token}
+    for pick_id, home_team, away_team, market_key, outcome in rows:
+        home_id = _team_id_map().get(_normalize_name(home_team))
+        away_id = _team_id_map().get(_normalize_name(away_team))
+        if not home_id or not away_id:
+            continue
+        try:
+            resp = _http_get(
+                f"https://api.football-data.org/v4/teams/{home_id}/matches",
+                headers=headers,
+                params={"status": "FINISHED", "dateFrom": prev_day, "dateTo": prev_day, "limit": "20"},
+                timeout=15,
+            )
+        except Exception:
+            continue
+        if resp.status_code != 200:
+            continue
+        matches = resp.json().get("matches", [])
+        match_row = next(
+            (
+                m
+                for m in matches
+                if int(m.get("homeTeam", {}).get("id", -1)) == int(home_id)
+                and int(m.get("awayTeam", {}).get("id", -1)) == int(away_id)
+            ),
+            None,
+        )
+        if not match_row:
+            continue
+        score = match_row.get("score", {}).get("fullTime", {})
+        home_goals = score.get("home")
+        away_goals = score.get("away")
+        if not isinstance(home_goals, int) or not isinstance(away_goals, int):
+            continue
+        result = _settle_pick_from_score(
+            {"market_key": market_key, "outcome": outcome},
+            home_goals,
+            away_goals,
+        )
+        if not result:
+            continue
+        now = datetime.now(timezone.utc).isoformat()
+        db.connection.execute(
+            """
+            UPDATE saved_picks
+            SET status = ?, settled_at = ?, result = ?
+            WHERE id = ?
+            """,
+            ("settled", now, result, int(pick_id)),
+        )
+    db.connection.commit()
+
+
 def _save_pick(db, payload: dict) -> None:
     now = datetime.now(timezone.utc).isoformat()
     odds_val = float(payload.get("odds", 0.0) or 0.0)
@@ -7669,6 +7773,7 @@ def _render_dashboard(
         finally:
             best_pick, target_matches = _enforce_tip_presence(best_pick, target_matches)
         _settle_saved_picks(db, config.odds_api_key)
+        _settle_previous_day_picks(db)
     else:
         if cached:
             odds_data = cached.get("odds_data")
@@ -7758,6 +7863,7 @@ def _render_dashboard(
         if fallback_picks:
             best_pick, target_matches = _select_stat_picks(fallback_picks, limit=2)
             target_matches = _normalize_target_matches(best_pick, target_matches, best_combo)
+    _settle_previous_day_picks(db)
     saved_picks = _list_saved_picks(db)
     saved_summary = _saved_picks_summary(saved_picks)
     saved_summary_15d = _saved_picks_summary_range(saved_picks, 15)
@@ -7888,7 +7994,9 @@ def _render_dashboard(
     if not target_matches_odds and target_matches:
         if target_matches[0].get("odds") and target_matches[0].get("odds") > 1.01:
             target_matches_odds = target_matches[:2]
-    target_matches_no_odds = target_matches[:2] if target_matches else []
+    target_matches_no_odds = [pick for pick in (target_matches or []) if not ((pick.get("odds") or 0) > 1.01)]
+    active_odds = target_matches_odds[:2]
+    active_no_odds = target_matches_no_odds[:2]
     if not odds_pool_matches or not target_matches_odds:
         odds_count = 0
     daily_roi = _daily_roi_series(db)
@@ -7904,6 +8012,8 @@ def _render_dashboard(
         "target_matches": target_matches,
         "target_matches_odds": target_matches_odds,
         "target_matches_no_odds": target_matches_no_odds,
+        "active_odds": active_odds,
+        "active_no_odds": active_no_odds,
         "recent_matches": recent_matches,
         "standings": standings,
         "_match_reasons": _match_reasons,

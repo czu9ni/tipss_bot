@@ -492,6 +492,53 @@
     </div>
 
     <section class="grid">
+      <article class="card table-card">
+        <h3>Aktiv tippek - odds van</h3>
+        <table>
+          <thead>
+            <tr><th>Meccs</th><th>Piac</th><th>Kimenetel</th><th>Odds</th><th>Pont</th></tr>
+          </thead>
+          <tbody>
+            {% for pick in active_odds %}
+            <tr>
+              <td>{{ pick.home_team }} vs {{ pick.away_team }}</td>
+              <td>{{ pick.market_label }}</td>
+              <td>{{ pick.outcome }}</td>
+              <td>{{ '%.2f'|format(pick.odds or 0.0) }}</td>
+              <td>{{ '%.2f'|format(pick.score or 0.0) }}</td>
+            </tr>
+            {% endfor %}
+            {% if not active_odds %}
+            <tr><td colspan="5">Most nincs oddsos aktiv tipp.</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </article>
+      <article class="card table-card">
+        <h3>Aktiv tippek - odds nelkul</h3>
+        <table>
+          <thead>
+            <tr><th>Meccs</th><th>Piac</th><th>Kimenetel</th><th>Esely</th><th>Pont</th></tr>
+          </thead>
+          <tbody>
+            {% for pick in active_no_odds %}
+            <tr>
+              <td>{{ pick.home_team }} vs {{ pick.away_team }}</td>
+              <td>{{ pick.market_label }}</td>
+              <td>{{ pick.outcome }}</td>
+              <td>{{ '%.0f'|format((pick.model_prob or 0.0) * 100) }}%</td>
+              <td>{{ '%.2f'|format(pick.score or 0.0) }}</td>
+            </tr>
+            {% endfor %}
+            {% if not active_no_odds %}
+            <tr><td colspan="5">Most nincs odds nelkuli aktiv tipp.</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </article>
+    </section>
+
+    <section class="grid">
       <article class="card highlight-card">
         {% if top_pick %}
         <div class="card-head">
