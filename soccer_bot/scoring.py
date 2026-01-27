@@ -392,8 +392,6 @@ def score_fixture(
         )
     )
 
-    if not odds_ok:
-        picks = [item for item in picks if item.market.lower() != "dupla esely"]
     return picks
 
 

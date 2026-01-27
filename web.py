@@ -5519,8 +5519,7 @@ def _stat_pick_for_match(
         stats=stats_payload if has_stats else None,
         events=None,
     )
-    # Ha nincs odds, ne valassz Dupla esely piacot.
-    picks = [p for p in picks if p.market.lower() != "dupla esely"]
+    # Stat-only mode can now recommend all supported markets.
     # Bias the stat-only market choice toward what the data says about goals.
     over_rate_vals = [
         val
