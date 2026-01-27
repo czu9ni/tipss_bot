@@ -2762,6 +2762,15 @@ def _is_pick_complete(pick: dict) -> bool:
 def _select_stat_picks(picks: list[dict], limit: int = 2) -> tuple[dict | None, list[dict]]:
     if not picks:
         return None, []
+    def _decision_value(item: dict) -> float:
+        prob = float(item.get("model_prob") or 0.0)
+        odds = float(item.get("odds") or 0.0)
+        if prob > 0 and odds > 1.01:
+            # Applied math: favor higher expected return when odds exist.
+            return prob * odds
+        if prob > 0:
+            return prob
+        return float(item.get("score") or 0.0)
     enrich_limit = int(os.environ.get("STAT_ONLY_ENRICH_LIMIT", "4"))
     if enrich_limit < limit:
         enrich_limit = limit
@@ -2785,9 +2794,9 @@ def _select_stat_picks(picks: list[dict], limit: int = 2) -> tuple[dict | None, 
         if not market_key:
             continue
         prev = market_best.get(market_key)
-        if not prev or float(item.get("score", 0.0)) > float(prev.get("score", 0.0)):
+        if not prev or _decision_value(item) > _decision_value(prev):
             market_best[market_key] = item
-    diversified = sorted(market_best.values(), key=lambda it: float(it.get("score", 0.0)), reverse=True)
+    diversified = sorted(market_best.values(), key=_decision_value, reverse=True)
     selected: list[dict] = diversified[:limit]
     if len(selected) < limit:
         for item in ranked:
@@ -2803,7 +2812,7 @@ def _select_stat_picks(picks: list[dict], limit: int = 2) -> tuple[dict | None, 
         for item in selected:
             if not _is_pick_complete(item):
                 item["notice"] = "RESZLEGES ADATOK MIATT KORLATOZOTT"
-    best_pick = max(selected, key=lambda item: item.get("score", 0.0)) if selected else enriched[0]
+    best_pick = max(selected, key=_decision_value) if selected else enriched[0]
     return best_pick, selected
 
 
