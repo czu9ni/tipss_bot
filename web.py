@@ -7159,6 +7159,14 @@ def _render_dashboard(
     _reload_env()
     global _REMOTE_CALLS
     _REMOTE_CALLS = 0
+    # If the API quota snapshot says we're out, do not burn more calls.
+    try:
+        quota = _api_quota_snapshot().get("football_data", {})
+        remaining = quota.get("remaining")
+        if allow_remote and isinstance(remaining, int) and remaining <= 0:
+            allow_remote = False
+    except Exception:
+        pass
     if not allow_remote:
         refresh_requested = False
         force_refresh = False
