@@ -2760,26 +2760,24 @@ def _select_stat_picks(picks: list[dict], limit: int = 2) -> tuple[dict | None, 
     remaining = [item for item in enriched if item not in complete]
     remaining = _filter_picks_by_risk(remaining)
     ranked = complete + remaining
-    # Diversify stat-only picks so we do not always show the same market.
-    diversified: list[dict] = []
-    used_markets: set[str] = set()
+    # Hard diversify: take the single best pick per market first.
+    market_best: dict[str, dict] = {}
     for item in ranked:
         market_key = str(item.get("market_key") or "")
-        if market_key and market_key in used_markets and len(ranked) > limit:
+        if not market_key:
             continue
-        diversified.append(item)
-        if market_key:
-            used_markets.add(market_key)
-        if len(diversified) >= limit:
-            break
-    if len(diversified) < limit:
+        prev = market_best.get(market_key)
+        if not prev or float(item.get("score", 0.0)) > float(prev.get("score", 0.0)):
+            market_best[market_key] = item
+    diversified = sorted(market_best.values(), key=lambda it: float(it.get("score", 0.0)), reverse=True)
+    selected: list[dict] = diversified[:limit]
+    if len(selected) < limit:
         for item in ranked:
-            if item in diversified:
+            if item in selected:
                 continue
-            diversified.append(item)
-            if len(diversified) >= limit:
+            selected.append(item)
+            if len(selected) >= limit:
                 break
-    selected = diversified[:limit]
     if not complete:
         for item in selected:
             item["notice"] = "NINCS ELEG STAT, AZ AJANLAS KORLATOZOTT"
@@ -5503,20 +5501,54 @@ def _stat_pick_for_match(
                 "goals_for": table_entry.get("goals_for"),
                 "goals_against": table_entry.get("goals_against"),
             }
+    def _rates_from_matches(summary: dict, team_name: str) -> dict[str, float]:
+        matches = summary.get("matches") if isinstance(summary, dict) else []
+        if not isinstance(matches, list) or not matches:
+            return {}
+        team_norm = _normalize_team_name(team_name)
+        over_hits = 0
+        btts_hits = 0
+        gf_sum = 0.0
+        ga_sum = 0.0
+        total = 0
+        for row in matches[:8]:
+            try:
+                gf = float(row.get("gf", 0))
+                ga = float(row.get("ga", 0))
+            except Exception:
+                continue
+            total_goals = gf + ga
+            if total_goals >= 3:
+                over_hits += 1
+            if gf > 0 and ga > 0:
+                btts_hits += 1
+            gf_sum += gf
+            ga_sum += ga
+            total += 1
+        if total <= 0:
+            return {}
+        return {
+            "over25_rate": over_hits / total,
+            "btts_rate": btts_hits / total,
+            "gf_avg": gf_sum / total,
+            "ga_avg": ga_sum / total,
+        }
+    home_recent = _rates_from_matches(home_summary, home_team)
+    away_recent = _rates_from_matches(away_summary, away_team)
     stats_payload = {
         "home_corners": home_summary.get("corners_avg"),
         "away_corners": away_summary.get("corners_avg"),
         "home_cards": home_summary.get("cards_avg"),
         "away_cards": away_summary.get("cards_avg"),
         # Richer stat hints so the scorer can use more than a single equation.
-        "home_over25_rate": home_summary.get("over25_rate") or home_form.get("over25_rate"),
-        "away_over25_rate": away_summary.get("over25_rate") or away_form.get("over25_rate"),
-        "home_btts_rate": home_summary.get("btts_rate") or home_form.get("btts_rate"),
-        "away_btts_rate": away_summary.get("btts_rate") or away_form.get("btts_rate"),
-        "home_gf_avg": home_summary.get("goals_for_avg") or home_form.get("gf_avg"),
-        "away_gf_avg": away_summary.get("goals_for_avg") or away_form.get("gf_avg"),
-        "home_ga_avg": home_form.get("ga_avg"),
-        "away_ga_avg": away_form.get("ga_avg"),
+        "home_over25_rate": home_recent.get("over25_rate") or home_summary.get("over25_rate") or home_form.get("over25_rate"),
+        "away_over25_rate": away_recent.get("over25_rate") or away_summary.get("over25_rate") or away_form.get("over25_rate"),
+        "home_btts_rate": home_recent.get("btts_rate") or home_summary.get("btts_rate") or home_form.get("btts_rate"),
+        "away_btts_rate": away_recent.get("btts_rate") or away_summary.get("btts_rate") or away_form.get("btts_rate"),
+        "home_gf_avg": home_recent.get("gf_avg") or home_summary.get("goals_for_avg") or home_form.get("gf_avg"),
+        "away_gf_avg": away_recent.get("gf_avg") or away_summary.get("goals_for_avg") or away_form.get("gf_avg"),
+        "home_ga_avg": home_recent.get("ga_avg") or home_form.get("ga_avg"),
+        "away_ga_avg": away_recent.get("ga_avg") or away_form.get("ga_avg"),
     }
     has_stats = any(isinstance(stats_payload.get(k), (int, float)) for k in stats_payload)
     picks = score_fixture(
