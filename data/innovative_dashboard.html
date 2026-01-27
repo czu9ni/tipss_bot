@@ -539,6 +539,72 @@
     </section>
 
     <section class="grid">
+      {% set active_all = active_odds + active_no_odds %}
+      {% for pick in active_all[:2] %}
+      <article class="card detail-section">
+        <div class="detail-panel">
+          <h3>{{ pick.home_team }} vs {{ pick.away_team }}</h3>
+          <p class="small-label">{{ pick.competition or "-" }} · {{ pick.market_label }} · {{ pick.outcome }}</p>
+          {% set home_table = pick.home_summary.get('table_entry') if pick.home_summary else None %}
+          {% set away_table = pick.away_summary.get('table_entry') if pick.away_summary else None %}
+          {% if home_table or away_table %}
+          <div class="line"><span>Tabella</span><span></span></div>
+          <div class="small-label">
+            {{ pick.home_team }}: #{{ home_table.get('position') if home_table else "?" }} · {{ home_table.get('points') if home_table else "?" }} pont
+          </div>
+          <div class="small-label" style="margin-bottom:0.5rem;">
+            {{ pick.away_team }}: #{{ away_table.get('position') if away_table else "?" }} · {{ away_table.get('points') if away_table else "?" }} pont
+          </div>
+          {% endif %}
+          <div class="line"><span>Hazai utolso 5</span><span></span></div>
+          <table class="detail-matches">
+            <thead><tr><th>Datum</th><th>Ellenfel</th><th>Eredmeny</th></tr></thead>
+            <tbody>
+              {% set shown_home = false %}
+              {% for row in (pick.home_summary.get('matches', []) if pick.home_summary else [])[:5] %}
+              <tr>
+                <td>{{ row.date or "?" }}</td>
+                <td>{{ row.opponent or "-" }}</td>
+                <td>{{ row.score or "-" }}</td>
+              </tr>
+              {% set shown_home = true %}
+              {% endfor %}
+              {% if not shown_home %}
+              <tr><td colspan="3">Nincs hazai elozo meccs adat.</td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+        <div class="detail-panel">
+          <div class="line"><span>Vendeg utolso 5</span><span></span></div>
+          <table class="detail-matches">
+            <thead><tr><th>Datum</th><th>Ellenfel</th><th>Eredmeny</th></tr></thead>
+            <tbody>
+              {% set shown_away = false %}
+              {% for row in (pick.away_summary.get('matches', []) if pick.away_summary else [])[:5] %}
+              <tr>
+                <td>{{ row.date or "?" }}</td>
+                <td>{{ row.opponent or "-" }}</td>
+                <td>{{ row.score or "-" }}</td>
+              </tr>
+              {% set shown_away = true %}
+              {% endfor %}
+              {% if not shown_away %}
+              <tr><td colspan="3">Nincs vendeg elozo meccs adat.</td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </article>
+      {% endfor %}
+      {% if not active_all %}
+      <article class="card">
+        <p class="small-label">Nincs aktiv tipp a reszletes elozo meccsekhez.</p>
+      </article>
+      {% endif %}
+    </section>
+
+    <section class="grid">
       <article class="card highlight-card">
         {% if top_pick %}
         <div class="card-head">
