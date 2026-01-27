@@ -703,7 +703,45 @@
 
       <div class="heavy-trigger wide">
         <button id="btnSaved" class="toggle-btn" type="button">Mentett tippek betöltése</button>
-        <div id="savedPlaceholder" class="heavy-placeholder" aria-live="polite">Mentett tippek betöltésre várnak...</div>
+        <div id="savedPlaceholder" class="heavy-placeholder" aria-live="polite">
+          <article class="card table-card">
+            <h2>Diagnosztika es mentesek</h2>
+            <div class="status-grid" style="margin-bottom: 1rem;">
+              <div class="status-item">
+                <div class="status-value">
+                  <span>24h ligak</span>
+                  <span>{{ diag_counts.comp_24 }}</span>
+                </div>
+                <span class="small-label">Aktiv meccsek: {{ diag_counts.all_24 }}</span>
+              </div>
+              <div class="status-item">
+                <div class="status-value">
+                  <span>API-Football</span>
+                  <span>{{ diag_counts.api_football_24 }}</span>
+                </div>
+                <span class="small-label">Forras: {{ diag_counts.window_source or "system" }}</span>
+              </div>
+              <div class="status-item">
+                <div class="status-value">
+                  <span>Mentett tippek</span>
+                  <span>{{ saved_picks|length }}</span>
+                </div>
+                <span class="small-label">Stake: {{ "%.1f"|format(stake_pct if stake_pct else 0.0) }}%</span>
+              </div>
+            </div>
+            <table>
+              <thead>
+                <tr><th>Szelveny</th><th>Odds</th><th>Outcome</th></tr>
+              </thead>
+              <tbody id="saved-rows"></tbody>
+            </table>
+            {% if saved_picks|length > 0 %}
+            <div class="table-actions">
+              <button id="load-more-saved" type="button" class="btn">Tovabbi 20 tipp</button>
+            </div>
+            {% endif %}
+          </article>
+        </div>
       </div>
     </section>
 
