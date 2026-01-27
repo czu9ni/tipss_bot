@@ -5442,18 +5442,107 @@ def _stat_pick_for_match(
         team = row.get("team")
         if team:
             standings_index[_normalize_team_name(team)] = row
+    home_form = _team_form_stats(home_team, table_scores)
+    away_form = _team_form_stats(away_team, table_scores)
+    played_est = 10
+    def _ensure_form_row(team_name: str, form: dict[str, float]) -> None:
+        norm = _normalize_team_name(team_name)
+        row = standings_index.get(norm, {})
+        if not isinstance(row, dict):
+            row = {}
+        if not row.get("played"):
+            row["played"] = played_est
+        if not row.get("points"):
+            ppg_norm = float(form.get("ppg_norm", table_scores.get(team_name, 0.5)) or 0.5)
+            row["points"] = int(max(0, round(ppg_norm * row["played"] * 3)))
+        if not row.get("goals_for"):
+            row["goals_for"] = int(max(0, round(float(form.get("gf_avg", 1.2) or 1.2) * row["played"])))
+        if not row.get("goals_against"):
+            row["goals_against"] = int(max(0, round(float(form.get("ga_avg", 1.2) or 1.2) * row["played"])))
+        row.setdefault("team", team_name)
+        standings_index[norm] = row
+    _ensure_form_row(home_team, home_form)
+    _ensure_form_row(away_team, away_form)
+    home_summary = _summary_dict(home_team, match.get("home_id"))
+    away_summary = _summary_dict(away_team, match.get("away_id"))
+    # Use any table entries discovered during summary fetch to enrich standings.
+    for team_name, summary in ((home_team, home_summary), (away_team, away_summary)):
+        table_entry = summary.get("table_entry") if isinstance(summary, dict) else None
+        if not isinstance(table_entry, dict):
+            continue
+        norm = _normalize_team_name(str(table_entry.get("team") or team_name))
+        if norm and norm not in standings_index:
+            standings_index[norm] = {
+                "team": table_entry.get("team") or team_name,
+                "position": table_entry.get("position"),
+                "points": table_entry.get("points"),
+                "played": table_entry.get("played"),
+                "won": table_entry.get("won"),
+                "draw": table_entry.get("draw"),
+                "lost": table_entry.get("lost"),
+                "goals_for": table_entry.get("goals_for"),
+                "goals_against": table_entry.get("goals_against"),
+            }
+    stats_payload = {
+        "home_corners": home_summary.get("corners_avg"),
+        "away_corners": away_summary.get("corners_avg"),
+        "home_cards": home_summary.get("cards_avg"),
+        "away_cards": away_summary.get("cards_avg"),
+    }
+    has_stats = any(isinstance(stats_payload.get(k), (int, float)) for k in stats_payload)
     picks = score_fixture(
         fixture_id=str(match.get("id") or ""),
         home_team=home_team,
         away_team=away_team,
         standings=standings_index,
         odds=None,
-        stats=None,
+        stats=stats_payload if has_stats else None,
         events=None,
     )
     # Ha nincs odds, ne valassz Dupla esely piacot.
     picks = [p for p in picks if p.market.lower() != "dupla esely"]
-    best = max(picks, key=lambda p: p.score)
+    # Bias the stat-only market choice toward what the data says about goals.
+    over_rate_vals = [
+        val
+        for val in (home_summary.get("over25_rate"), away_summary.get("over25_rate"))
+        if isinstance(val, (int, float))
+    ]
+    if not over_rate_vals:
+        over_rate_vals = [
+            val
+            for val in (home_form.get("over25_rate"), away_form.get("over25_rate"))
+            if isinstance(val, (int, float))
+        ]
+    btts_rate_vals = [
+        val
+        for val in (home_summary.get("btts_rate"), away_summary.get("btts_rate"))
+        if isinstance(val, (int, float))
+    ]
+    if not btts_rate_vals:
+        btts_rate_vals = [
+            val
+            for val in (home_form.get("btts_rate"), away_form.get("btts_rate"))
+            if isinstance(val, (int, float))
+        ]
+    over_rate = (sum(over_rate_vals) / len(over_rate_vals)) if over_rate_vals else None
+    btts_rate = (sum(btts_rate_vals) / len(btts_rate_vals)) if btts_rate_vals else None
+    adjusted: list[tuple[float, object]] = []
+    for pick_item in picks:
+        score = pick_item.score
+        market_lower = pick_item.market.lower()
+        outcome_lower = pick_item.outcome.lower()
+        if isinstance(over_rate, (int, float)) and "over/under" in market_lower:
+            if over_rate >= 0.6 and outcome_lower.startswith("over"):
+                score += 0.06
+            elif over_rate <= 0.45 and outcome_lower.startswith("under"):
+                score += 0.06
+        if isinstance(btts_rate, (int, float)) and market_lower == "btts":
+            if btts_rate >= 0.6 and "igen" in outcome_lower:
+                score += 0.05
+            elif btts_rate <= 0.45 and "nem" in outcome_lower:
+                score += 0.05
+        adjusted.append((score, pick_item))
+    best = max(adjusted, key=lambda item: item[0])[1] if adjusted else max(picks, key=lambda p: p.score)
     market_key = _market_key_from_pick(best.market)
     pick = {
         "match_key": _match_key(match),
