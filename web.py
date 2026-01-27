@@ -6244,37 +6244,13 @@ def _settle_saved_picks(db, api_key: str) -> None:
 
 
 def _settle_pick_from_score(pick: dict, home_goals: int, away_goals: int) -> str | None:
-    market = str(pick.get("market_key") or "").lower()
-    outcome = str(pick.get("outcome") or "").lower()
-    total_goals = int(home_goals) + int(away_goals)
-    if market in {"totals", "alternate_totals", "over_under"}:
-        if "under" in outcome:
-            return "win" if total_goals < 3 else "lose"
-        if "over" in outcome:
-            return "win" if total_goals >= 3 else "lose"
-        return None
-    if market == "btts":
-        btts = home_goals > 0 and away_goals > 0
-        if "igen" in outcome or "yes" in outcome:
-            return "win" if btts else "lose"
-        if "nem" in outcome or "no" in outcome:
-            return "win" if not btts else "lose"
-        return None
-    if market in {"h2h", "1x2"}:
-        if home_goals > away_goals:
-            actual = "home"
-        elif home_goals < away_goals:
-            actual = "away"
-        else:
-            actual = "draw"
-        if "hazai" in outcome or "home" in outcome:
-            return "win" if actual == "home" else "lose"
-        if "vendeg" in outcome or "away" in outcome:
-            return "win" if actual == "away" else "lose"
-        if "dontetlen" in outcome or "draw" in outcome:
-            return "win" if actual == "draw" else "lose"
-        return None
-    return None
+    market_key = str(pick.get("market_key") or "").lower()
+    outcome = str(pick.get("outcome") or "")
+    line_val = pick.get("line")
+    if not isinstance(line_val, (int, float)):
+        line_val = _parse_line_from_outcome(outcome)
+    # Reuse the full evaluator so every supported market is settled consistently.
+    return _evaluate_pick(market_key, outcome, line_val, int(home_goals), int(away_goals))
 
 
 def _settle_previous_day_picks(db) -> None:
