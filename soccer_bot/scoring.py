@@ -327,7 +327,8 @@ def score_fixture(
         ]
         if over_vals:
             over_rate = sum(over_vals) / len(over_vals)
-            over_model_base = (over_model_base * 0.5) + (over_rate * 0.5)
+            # When we have actual over-rate stats, trust them directly.
+            over_model_base = max(0.05, min(0.95, over_rate))
     over_model = _calibrate_prob(over_model_base, coverage)
     under_model = _calibrate_prob(1 - over_model_base, coverage)
     over_score, over_ev = _select_score(over_model, over_imp, over_odd)
@@ -368,7 +369,8 @@ def score_fixture(
         ]
         if btts_vals:
             btts_rate = sum(btts_vals) / len(btts_vals)
-            btts_yes_base = (btts_yes_base * 0.7) + (btts_rate * 0.3)
+            # When we have actual BTTS rate stats, trust them directly.
+            btts_yes_base = max(0.05, min(0.95, btts_rate))
     btts_yes_model = _calibrate_prob(btts_yes_base, coverage)
     btts_no_model = _calibrate_prob(1 - btts_yes_base, coverage)
     btts_yes_score, btts_yes_ev = _select_score(btts_yes_model, btts_yes_imp, btts_yes_odd)
