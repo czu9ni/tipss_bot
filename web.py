@@ -5632,16 +5632,26 @@ def _stat_pick_for_match(
             elif btts_rate <= 0.45 and "nem" in outcome_lower:
                 score += 0.05
         adjusted.append((score, pick_item))
-    # Math-first selection: choose the highest model probability (argmax P).
-    prob_ranked = [
-        (float(item.model_prob), item)
-        for _, item in adjusted
-        if isinstance(item.model_prob, (int, float))
-    ]
-    if prob_ranked:
-        best = max(prob_ranked, key=lambda it: it[0])[1]
-    else:
-        best = max(adjusted, key=lambda item: item[0])[1] if adjusted else max(picks, key=lambda p: p.score)
+    def _decision_value(pick_item) -> float:
+        # Efficient, math-first combination of probabilities + data coverage.
+        base_prob = float(pick_item.model_prob or 0.0)
+        market_lower = pick_item.market.lower()
+        outcome_lower = pick_item.outcome.lower()
+        market_fit = 0.0
+        if isinstance(over_rate, (int, float)) and "over/under" in market_lower:
+            market_fit = over_rate if outcome_lower.startswith("over") else (1 - over_rate)
+        elif isinstance(btts_rate, (int, float)) and market_lower == "btts":
+            market_fit = btts_rate if "igen" in outcome_lower else (1 - btts_rate)
+        else:
+            market_fit = base_prob
+        coverage = 0.5
+        if isinstance(over_rate, (int, float)) or isinstance(btts_rate, (int, float)):
+            coverage += 0.25
+        if standings_index:
+            coverage += 0.25
+        coverage = max(0.5, min(1.0, coverage))
+        return (0.6 * base_prob) + (0.2 * market_fit) + (0.2 * coverage)
+    best = max((item for _, item in adjusted), key=_decision_value) if adjusted else max(picks, key=lambda p: p.score)
     market_key = _market_key_from_pick(best.market)
     pick = {
         "match_key": _match_key(match),
